@@ -12,12 +12,12 @@ const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
   START_URL: 'https://www.tripadvisor.co.uk/Hotels-g45963-a_travelersChoice.1-Las_Vegas_Nevada-Hotels.html',
-  MAX_HOTELS: 50,  // Target all 50 hotels
-  BATCH_SIZE: 5,   // Process in batches due to page limits
+  MAX_HOTELS: 2,  // Target all 50 hotels
+  BATCH_SIZE: parseInt(process.env.BATCH_SIZE || '50'),   // Process all hotels by default
   BATCH_START: parseInt(process.env.BATCH_START || '0'),  // Which batch to start from (0, 5, 10, etc.)
   MAX_REVIEW_PAGES: 20,  // Max pages of reviews per hotel
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
-  DELAY_BETWEEN_HOTELS: 5000,
+  DELAY_BETWEEN_HOTELS: 3000,
   DELAY_BETWEEN_PAGES: 3000,
   RESULTS_DIR: './results',
 };
@@ -317,11 +317,8 @@ async function main() {
   console.log('║  (Automatic CAPTCHA Solving)                          ║');
   console.log('╚════════════════════════════════════════════════════════╝\n');
 
-  const batchEnd = Math.min(CONFIG.BATCH_START + CONFIG.BATCH_SIZE, CONFIG.MAX_HOTELS);
-
   console.log('📋 Config:');
-  console.log(`   Total Hotels: ${CONFIG.MAX_HOTELS}`);
-  console.log(`   Batch: ${CONFIG.BATCH_START + 1}-${batchEnd} (${CONFIG.BATCH_SIZE} hotels)`);
+  console.log(`   Target Hotels: ${CONFIG.MAX_HOTELS}`);
   console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel`);
   console.log(`   Keywords: ${CONFIG.CELEBRITY_KEYWORDS.join(', ')}`);
   console.log('\n🔌 Connecting to Scraping Browser...');
@@ -363,15 +360,19 @@ async function main() {
       }
     }
 
-    // Process only the batch range
-    const hotelsToProcess = hotels.slice(CONFIG.BATCH_START, batchEnd);
+    // Process ALL hotels from the list
+    console.log(`\n📊 Processing ${hotels.length} hotels\n`);
 
-    console.log(`\n📊 Processing hotels ${CONFIG.BATCH_START + 1}-${batchEnd} of ${hotels.length} total\n`);
+    for (let i = 0; i < hotels.length; i++) {
+      const hotel = hotels[i];
+      console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
 
-    for (let i = 0; i < hotelsToProcess.length; i++) {
-      const hotel = hotelsToProcess[i];
-      const globalIndex = CONFIG.BATCH_START + i;
-      console.log(`\n[${globalIndex + 1}/${hotels.length}] ${hotel.name}`);
+      // Skip if already processed with reviews
+      const existingResult = results.find(r => r.url === hotel.url);
+      if (existingResult && existingResult.totalReviews > 0) {
+        console.log(`  ⏭️  Already processed (${existingResult.totalReviews} reviews)`);
+        continue;
+      }
 
       const reviews = await extractHotelReviews(page, client, hotel.url, hotel.name);
 
@@ -404,7 +405,13 @@ async function main() {
         allReviews: reviews
       };
 
-      results.push(hotelResult);
+      // Update or add result
+      const existingIndex = results.findIndex(r => r.url === hotel.url);
+      if (existingIndex >= 0) {
+        results[existingIndex] = hotelResult;
+      } else {
+        results.push(hotelResult);
+      }
 
       console.log(`  ⭐ Mentions: ${totalMentions} in ${reviewsWithMentions.length} reviews`);
       if (Object.keys(mentionBreakdown).length > 0) {
@@ -413,7 +420,7 @@ async function main() {
 
       saveResults(results, 'scraping-progress.json');
 
-      if (i < hotelsToProcess.length - 1) {
+      if (i < hotels.length - 1) {
         console.log(`  ⏳ Waiting ${CONFIG.DELAY_BETWEEN_HOTELS / 1000}s...`);
         await randomDelay(CONFIG.DELAY_BETWEEN_HOTELS, CONFIG.DELAY_BETWEEN_HOTELS + 2000);
       }
@@ -434,27 +441,17 @@ async function main() {
     saveResults(summary, 'summary-report.json');
 
     console.log('\n' + '═'.repeat(60));
-    console.log('✅ BATCH SCRAPING COMPLETED!');
+    console.log('✅ SCRAPING COMPLETED!');
     console.log('═'.repeat(60));
-    console.log(`📊 Hotels in this batch: ${hotelsToProcess.length}`);
-    console.log(`📊 Total hotels scraped: ${summary.totalHotelsScraped}`);
-    console.log(`📝 Reviews: ${summary.totalReviewsScraped}`);
-    console.log(`⭐ Celebrity Mentions: ${summary.totalCelebrityMentions}`);
-    console.log(`🏨 Hotels with Mentions: ${summary.hotelsWithMentions}`);
-    console.log('\n🏆 Top 5:');
+    console.log(`📊 Hotels scraped: ${summary.totalHotelsScraped}`);
+    console.log(`📝 Total reviews: ${summary.totalReviewsScraped}`);
+    console.log(`⭐ Celebrity mentions: ${summary.totalCelebrityMentions}`);
+    console.log(`🏨 Hotels with mentions: ${summary.hotelsWithMentions}`);
+    console.log('\n🏆 Top 5 Hotels by Celebrity Mentions:');
     summary.topHotelsByMentions.slice(0, 5).forEach((h, i) => {
       console.log(`   ${i + 1}. ${h.name} - ${h.mentions} mentions`);
     });
-    console.log(`\n📁 Results: ./${CONFIG.RESULTS_DIR}/`);
-
-    if (batchEnd < CONFIG.MAX_HOTELS) {
-      console.log(`\n⚡ To continue with next batch, run:`);
-      console.log(`   BATCH_START=${batchEnd} npm start`);
-      console.log(`\n📝 Or use the batch runner:`);
-      console.log(`   node run-all-batches.js\n`);
-    } else {
-      console.log(`\n✅ All ${CONFIG.MAX_HOTELS} hotels have been processed!\n`);
-    }
+    console.log(`\n📁 Results saved to: ./${CONFIG.RESULTS_DIR}/\n`);
 
   } catch (error) {
     console.error('\n❌ Error:', error.message);
