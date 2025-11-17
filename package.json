@@ -6,15 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node scraping-browser.js",
-    "scrape": "node scraping-browser.js",
-    "reviews": "node extract-reviews.js",
-    "reviews:all": "node run-review-batches.js",
-    "proxy": "node proxy-scraper.js",
-    "playwright": "node playwright-scraper.js",
-    "puppeteer": "node stealth-scraper.js",
-    "chrome": "node chrome-cdp-scraper.js",
-    "test": "node test-page.js",
-    "debug": "node debug.js"
+    "reviews": "node extract-reviews.js"
   },
   "keywords": [
     "tripadvisor",

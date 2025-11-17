@@ -20,7 +20,7 @@ const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 const CONFIG = {
   BATCH_SIZE: 5,   // Process in batches due to page limits
   BATCH_START: parseInt(process.env.BATCH_START || '0'),
-  MAX_REVIEW_PAGES: 20,  // Max pages of reviews per hotel
+  MAX_REVIEW_PAGES: 10,  // Max pages of reviews per hotel
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 5000,
   DELAY_BETWEEN_PAGES: 3000,

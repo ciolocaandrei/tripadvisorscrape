@@ -12,10 +12,10 @@ const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
   START_URL: 'https://www.tripadvisor.co.uk/Hotels-g45963-a_travelersChoice.1-Las_Vegas_Nevada-Hotels.html',
-  MAX_HOTELS: 2,  // Target all 50 hotels
+  MAX_HOTELS: 50,  // Target all 50 hotels
   BATCH_SIZE: parseInt(process.env.BATCH_SIZE || '50'),   // Process all hotels by default
   BATCH_START: parseInt(process.env.BATCH_START || '0'),  // Which batch to start from (0, 5, 10, etc.)
-  MAX_REVIEW_PAGES: 20,  // Max pages of reviews per hotel
+  MAX_REVIEW_PAGES: 10,  // Max pages of reviews per hotel
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 3000,
   DELAY_BETWEEN_PAGES: 3000,
