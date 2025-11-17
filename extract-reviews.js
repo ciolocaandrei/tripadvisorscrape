@@ -18,11 +18,9 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  BATCH_SIZE: 5,   // Process in batches due to page limits
-  BATCH_START: parseInt(process.env.BATCH_START || '0'),
-  MAX_REVIEW_PAGES: 10,  // Max pages of reviews per hotel
+  MAX_REVIEW_PAGES: 10,  // Max pages of reviews per hotel (50 hotels × 10 pages = 500 total)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
-  DELAY_BETWEEN_HOTELS: 5000,
+  DELAY_BETWEEN_HOTELS: 3000,
   DELAY_BETWEEN_PAGES: 3000,
   RESULTS_DIR: './results',
   HOTELS_FILE: './results/hotels-list.json',  // Read from existing hotel list
@@ -62,10 +60,21 @@ async function extractHotelReviews(page, client, hotelUrl, hotelName) {
   console.log(`\n📖 ${hotelName}`);
 
   try {
+    // Try to navigate - if it fails, return empty reviews
+    let navigationFailed = false;
     await page.goto(hotelUrl, {
       timeout: 120000,
       waitUntil: 'domcontentloaded'
+    }).catch(err => {
+      console.log(`  ⚠️ Navigation failed: ${err.message}`);
+      navigationFailed = true;
     });
+
+    // If navigation failed, return empty array
+    if (navigationFailed) {
+      console.log(`  ⏭️  Skipping hotel due to navigation failure`);
+      return [];
+    }
 
     // Check for CAPTCHA
     try {
@@ -76,7 +85,7 @@ async function extractHotelReviews(page, client, hotelUrl, hotelName) {
         console.log(`  ✓ CAPTCHA ${status}`);
       }
     } catch (e) {
-      // No CAPTCHA
+      // No CAPTCHA or error - continue
     }
 
     await randomDelay(2000, 4000);
@@ -160,22 +169,28 @@ async function extractHotelReviews(page, client, hotelUrl, hotelName) {
           );
 
           if (!isDisabled) {
-            await nextButton.click();
-            await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
-
-            // Check for CAPTCHA after navigation
             try {
-              const { status } = await client.send('Captcha.waitForSolve', {
-                detectTimeout: 3000,
-              });
-              if (status !== 'none') {
-                console.log(`    ✓ CAPTCHA ${status}`);
-              }
-            } catch (e) {
-              // No CAPTCHA
-            }
+              await nextButton.click();
+              await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
 
-            currentPage++;
+              // Check for CAPTCHA after navigation
+              try {
+                const { status } = await client.send('Captcha.waitForSolve', {
+                  detectTimeout: 3000,
+                });
+                if (status !== 'none') {
+                  console.log(`    ✓ CAPTCHA ${status}`);
+                }
+              } catch (e) {
+                // No CAPTCHA or error - continue
+              }
+
+              currentPage++;
+            } catch (navError) {
+              // Navigation failed (likely quota limit), stop pagination for this hotel
+              console.log(`    ⚠️ Pagination stopped: ${navError.message}`);
+              hasMorePages = false;
+            }
           } else {
             hasMorePages = false;
           }
@@ -214,11 +229,8 @@ async function main() {
   const hotels = JSON.parse(fs.readFileSync(CONFIG.HOTELS_FILE, 'utf8'));
   console.log(`✓ Loaded ${hotels.length} hotels from ${CONFIG.HOTELS_FILE}\n`);
 
-  const batchEnd = Math.min(CONFIG.BATCH_START + CONFIG.BATCH_SIZE, hotels.length);
-
   console.log('📋 Config:');
-  console.log(`   Total Hotels: ${hotels.length}`);
-  console.log(`   Batch: ${CONFIG.BATCH_START + 1}-${batchEnd} (${CONFIG.BATCH_SIZE} hotels)`);
+  console.log(`   Hotels to process: ${hotels.length}`);
   console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel`);
   console.log(`   Keywords: ${CONFIG.CELEBRITY_KEYWORDS.join(', ')}`);
   console.log('\n🔌 Connecting to Scraping Browser...');
@@ -249,15 +261,12 @@ async function main() {
       }
     }
 
-    // Process only the batch range
-    const hotelsToProcess = hotels.slice(CONFIG.BATCH_START, batchEnd);
+    // Process all hotels
+    console.log(`📊 Processing all ${hotels.length} hotels\n`);
 
-    console.log(`📊 Processing hotels ${CONFIG.BATCH_START + 1}-${batchEnd} of ${hotels.length} total\n`);
-
-    for (let i = 0; i < hotelsToProcess.length; i++) {
-      const hotel = hotelsToProcess[i];
-      const globalIndex = CONFIG.BATCH_START + i;
-      console.log(`\n[${globalIndex + 1}/${hotels.length}] ${hotel.name}`);
+    for (let i = 0; i < hotels.length; i++) {
+      const hotel = hotels[i];
+      console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
 
       // Skip if already processed
       const existingResult = results.find(r => r.url === hotel.url);
@@ -312,7 +321,7 @@ async function main() {
 
       saveResults(results, 'reviews-progress.json');
 
-      if (i < hotelsToProcess.length - 1) {
+      if (i < hotels.length - 1) {
         console.log(`  ⏳ Waiting ${CONFIG.DELAY_BETWEEN_HOTELS / 1000}s...`);
         await randomDelay(CONFIG.DELAY_BETWEEN_HOTELS, CONFIG.DELAY_BETWEEN_HOTELS + 2000);
       }
@@ -335,25 +344,16 @@ async function main() {
     console.log('\n' + '═'.repeat(60));
     console.log('✅ REVIEW EXTRACTION COMPLETED!');
     console.log('═'.repeat(60));
-    console.log(`📊 Hotels in this batch: ${hotelsToProcess.length}`);
-    console.log(`📊 Total hotels with reviews: ${summary.totalHotelsScraped}`);
-    console.log(`📝 Reviews: ${summary.totalReviewsScraped}`);
-    console.log(`⭐ Celebrity Mentions: ${summary.totalCelebrityMentions}`);
-    console.log(`🏨 Hotels with Mentions: ${summary.hotelsWithMentions}`);
-    console.log('\n🏆 Top 5:');
+    console.log(`📊 Total hotels processed: ${summary.totalHotelsScraped}`);
+    console.log(`📝 Total reviews: ${summary.totalReviewsScraped}`);
+    console.log(`⭐ Celebrity mentions: ${summary.totalCelebrityMentions}`);
+    console.log(`🏨 Hotels with mentions: ${summary.hotelsWithMentions}`);
+    console.log('\n🏆 Top 5 hotels by celebrity mentions:');
     summary.topHotelsByMentions.slice(0, 5).forEach((h, i) => {
       console.log(`   ${i + 1}. ${h.name} - ${h.mentions} mentions`);
     });
-    console.log(`\n📁 Results: ./${CONFIG.RESULTS_DIR}/`);
-
-    if (batchEnd < hotels.length) {
-      console.log(`\n⚡ To continue with next batch, run:`);
-      console.log(`   BATCH_START=${batchEnd} node extract-reviews.js`);
-      console.log(`\n📝 Or use the batch runner:`);
-      console.log(`   node run-review-batches.js\n`);
-    } else {
-      console.log(`\n✅ All ${hotels.length} hotels have been processed!\n`);
-    }
+    console.log(`\n📁 Results saved to: ./${CONFIG.RESULTS_DIR}/`);
+    console.log(`✅ All ${hotels.length} hotels have been processed!\n`);
 
   } catch (error) {
     console.error('\n❌ Error:', error.message);

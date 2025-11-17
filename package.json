@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node scraping-browser.js",
+    "start": "node scraping-browser.js && node extract-reviews.js",
     "reviews": "node extract-reviews.js"
   },
   "keywords": [

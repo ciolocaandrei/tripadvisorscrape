@@ -348,110 +348,12 @@ async function main() {
 
     saveResults(hotels, 'hotels-list.json');
 
-    // Load existing results if they exist
-    let results = [];
-    const progressFile = path.join(CONFIG.RESULTS_DIR, 'scraping-progress.json');
-    if (fs.existsSync(progressFile)) {
-      try {
-        results = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
-        console.log(`\n✓ Loaded ${results.length} existing results\n`);
-      } catch (e) {
-        console.log(`\n⚠️ Could not load existing results: ${e.message}\n`);
-      }
-    }
-
-    // Process ALL hotels from the list
-    console.log(`\n📊 Processing ${hotels.length} hotels\n`);
-
-    for (let i = 0; i < hotels.length; i++) {
-      const hotel = hotels[i];
-      console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
-
-      // Skip if already processed with reviews
-      const existingResult = results.find(r => r.url === hotel.url);
-      if (existingResult && existingResult.totalReviews > 0) {
-        console.log(`  ⏭️  Already processed (${existingResult.totalReviews} reviews)`);
-        continue;
-      }
-
-      const reviews = await extractHotelReviews(page, client, hotel.url, hotel.name);
-
-      let totalMentions = 0;
-      const mentionBreakdown = {};
-      const reviewsWithMentions = [];
-
-      reviews.forEach(review => {
-        const fullText = `${review.title} ${review.text}`;
-        const mentions = countCelebrityMentions(fullText);
-
-        if (mentions.total > 0) {
-          totalMentions += mentions.total;
-          reviewsWithMentions.push({ ...review, celebrityMentions: mentions });
-          Object.keys(mentions.breakdown).forEach(keyword => {
-            mentionBreakdown[keyword] = (mentionBreakdown[keyword] || 0) + mentions.breakdown[keyword];
-          });
-        }
-      });
-
-      const hotelResult = {
-        rank: hotel.rank,
-        name: hotel.name,
-        url: hotel.url,
-        totalReviews: reviews.length,
-        reviewsWithCelebrityMentions: reviewsWithMentions.length,
-        totalCelebrityMentions: totalMentions,
-        mentionBreakdown: mentionBreakdown,
-        reviewsWithMentions: reviewsWithMentions,
-        allReviews: reviews
-      };
-
-      // Update or add result
-      const existingIndex = results.findIndex(r => r.url === hotel.url);
-      if (existingIndex >= 0) {
-        results[existingIndex] = hotelResult;
-      } else {
-        results.push(hotelResult);
-      }
-
-      console.log(`  ⭐ Mentions: ${totalMentions} in ${reviewsWithMentions.length} reviews`);
-      if (Object.keys(mentionBreakdown).length > 0) {
-        console.log(`  📊 ${JSON.stringify(mentionBreakdown)}`);
-      }
-
-      saveResults(results, 'scraping-progress.json');
-
-      if (i < hotels.length - 1) {
-        console.log(`  ⏳ Waiting ${CONFIG.DELAY_BETWEEN_HOTELS / 1000}s...`);
-        await randomDelay(CONFIG.DELAY_BETWEEN_HOTELS, CONFIG.DELAY_BETWEEN_HOTELS + 2000);
-      }
-    }
-
-    const summary = {
-      totalHotelsScraped: results.length,
-      totalReviewsScraped: results.reduce((sum, h) => sum + h.totalReviews, 0),
-      totalCelebrityMentions: results.reduce((sum, h) => sum + h.totalCelebrityMentions, 0),
-      hotelsWithMentions: results.filter(h => h.totalCelebrityMentions > 0).length,
-      topHotelsByMentions: results
-        .sort((a, b) => b.totalCelebrityMentions - a.totalCelebrityMentions)
-        .slice(0, 10)
-        .map(h => ({ rank: h.rank, name: h.name, mentions: h.totalCelebrityMentions, breakdown: h.mentionBreakdown }))
-    };
-
-    saveResults(results, 'final-results.json');
-    saveResults(summary, 'summary-report.json');
-
     console.log('\n' + '═'.repeat(60));
-    console.log('✅ SCRAPING COMPLETED!');
+    console.log('✅ HOTEL LIST EXTRACTION COMPLETED!');
     console.log('═'.repeat(60));
-    console.log(`📊 Hotels scraped: ${summary.totalHotelsScraped}`);
-    console.log(`📝 Total reviews: ${summary.totalReviewsScraped}`);
-    console.log(`⭐ Celebrity mentions: ${summary.totalCelebrityMentions}`);
-    console.log(`🏨 Hotels with mentions: ${summary.hotelsWithMentions}`);
-    console.log('\n🏆 Top 5 Hotels by Celebrity Mentions:');
-    summary.topHotelsByMentions.slice(0, 5).forEach((h, i) => {
-      console.log(`   ${i + 1}. ${h.name} - ${h.mentions} mentions`);
-    });
-    console.log(`\n📁 Results saved to: ./${CONFIG.RESULTS_DIR}/\n`);
+    console.log(`📊 Hotels found: ${hotels.length}`);
+    console.log(`📁 Saved to: ./${CONFIG.RESULTS_DIR}/hotels-list.json`);
+    console.log(`\n➡️  Next: Starting review extraction...\n`);
 
   } catch (error) {
     console.error('\n❌ Error:', error.message);
