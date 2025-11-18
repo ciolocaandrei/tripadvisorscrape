@@ -18,11 +18,12 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
+  MAX_REVIEW_PAGES: 30,  // Max pages of reviews per hotel (~1000 reviews per hotel)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
-  DELAY_BETWEEN_HOTELS: 3000,
-  DELAY_BETWEEN_PAGES: 3000,
+  DELAY_BETWEEN_HOTELS: 100,
+  DELAY_BETWEEN_PAGES: 100,
   RESULTS_DIR: './results',
+  REVIEWS_DIR: './results/reviews',  // Individual hotel review files
   HOTELS_FILE: './results/hotels-list.json',  // Read from existing hotel list
 };
 
@@ -35,6 +36,41 @@ function saveResults(data, filename) {
   }
   const filepath = path.join(CONFIG.RESULTS_DIR, filename);
   fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+}
+
+function sanitizeFilename(name) {
+  // Convert to lowercase, replace spaces and special chars with hyphens
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 100); // Limit length
+}
+
+function saveHotelReviews(hotel, reviews, celebrityData) {
+  // Create reviews directory if it doesn't exist
+  if (!fs.existsSync(CONFIG.REVIEWS_DIR)) {
+    fs.mkdirSync(CONFIG.REVIEWS_DIR, { recursive: true });
+  }
+
+  const sanitizedName = sanitizeFilename(hotel.name);
+  const filename = `hotel-${hotel.rank}-${sanitizedName}.json`;
+  const filepath = path.join(CONFIG.REVIEWS_DIR, filename);
+
+  const hotelData = {
+    rank: hotel.rank,
+    name: hotel.name,
+    url: hotel.url,
+    totalReviews: reviews.length,
+    reviewsWithCelebrityMentions: celebrityData.reviewsWithMentions.length,
+    totalCelebrityMentions: celebrityData.totalMentions,
+    mentionBreakdown: celebrityData.mentionBreakdown,
+    reviews: reviews,
+    reviewsWithMentions: celebrityData.reviewsWithMentions
+  };
+
+  fs.writeFileSync(filepath, JSON.stringify(hotelData, null, 2));
+  console.log(`  💾 Saved to: ${filename}`);
 }
 
 function countCelebrityMentions(text) {
@@ -56,29 +92,53 @@ function countCelebrityMentions(text) {
   return { total, breakdown };
 }
 
-async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
+function buildReviewPageUrl(baseUrl, pageNum) {
+  // TripAdvisor uses -orX- for pagination where X is (pageNum - 1) * 10
+  // Example: page 1 = no offset, page 2 = -or10-, page 3 = -or20-
+  if (pageNum === 1) {
+    return baseUrl;
+  }
+
+  const offset = (pageNum - 1) * 10;
+
+  // Insert -orX- before the last part of the URL
+  // Example: /Hotel_Review-g45963-d99430-Reviews-Bellagio_Las_Vegas.html
+  // becomes: /Hotel_Review-g45963-d99430-Reviews-or10-Bellagio_Las_Vegas.html
+  const urlParts = baseUrl.split('-Reviews-');
+  if (urlParts.length === 2) {
+    return `${urlParts[0]}-Reviews-or${offset}-${urlParts[1]}`;
+  }
+
+  return baseUrl;
+}
+
+async function extractSinglePageWithFreshBrowser(hotelUrl, pageNum) {
   const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
   let browser;
 
   try {
+    // Fresh browser for this single page
     browser = await puppeteer.connect({
       browserWSEndpoint,
-      timeout: 60000
+      timeout: 10000
     });
 
     const page = await browser.newPage();
     const client = await page.createCDPSession();
 
-    // Navigate to hotel URL
-    await page.goto(hotelUrl, {
-      timeout: 120000,
+    // Build URL for this specific page
+    const pageUrl = buildReviewPageUrl(hotelUrl, pageNum);
+
+    // Navigate directly to the page URL
+    await page.goto(pageUrl, {
+      timeout: 20000,
       waitUntil: 'domcontentloaded'
     });
 
     // Check for CAPTCHA
     try {
       const { status } = await client.send('Captcha.waitForSolve', {
-        detectTimeout: 5000,
+        detectTimeout: 1000,
       });
       if (status !== 'none') {
         console.log(`    ✓ CAPTCHA ${status}`);
@@ -87,147 +147,70 @@ async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
       // No CAPTCHA
     }
 
-    await randomDelay(2000, 4000);
+    await randomDelay(300, 500);
 
-    let allReviews = [];
-    let currentPage = startPage;
-    let hasMorePages = true;
-    const endPage = startPage + maxPages - 1;
+    // Extract reviews from current page
+    await page.waitForSelector('[class*="review"], div', { timeout: 2000 });
+    await randomDelay(100, 200);
 
-    // If not starting from page 1, navigate to the correct page
-    if (startPage > 1) {
-      const paginationNeeded = startPage - 1;
-      for (let i = 0; i < paginationNeeded; i++) {
-        const nextButton = await page.$('[data-automation="pagination-next"], a.next, a[aria-label*="Next"]');
-        if (nextButton) {
-          const isDisabled = await nextButton.evaluate(btn =>
-            btn.disabled || btn.classList.contains('disabled') || btn.getAttribute('aria-disabled') === 'true'
-          );
-          if (!isDisabled) {
-            await nextButton.click();
-            await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
-          } else {
-            break;
-          }
+    const pageReviews = await page.evaluate(() => {
+      // TripAdvisor uses div[data-test-target="HR_CC_CARD"] for review cards
+      let reviewCards = document.querySelectorAll('div[data-test-target="HR_CC_CARD"]');
+
+      const reviews = [];
+
+      reviewCards.forEach(card => {
+        let title = '';
+        const titleEl = card.querySelector('[data-test-target="review-title"]');
+        if (titleEl) title = titleEl.textContent?.trim() || '';
+
+        let text = '';
+        // Review text is usually in a div/span after the title
+        const textEl = card.querySelector('[data-test-target="review-text"]');
+        if (textEl) {
+          text = textEl.textContent?.trim() || '';
         } else {
-          break;
-        }
-      }
-    }
-
-    while (hasMorePages && currentPage <= endPage) {
-      console.log(`    Page ${currentPage}...`);
-
-      try {
-        await page.waitForSelector('[class*="review"], div', { timeout: 8000 });
-        await randomDelay(1000, 2000);
-
-        const pageReviews = await page.evaluate(() => {
-          // TripAdvisor uses div[data-test-target="HR_CC_CARD"] for review cards
-          let reviewCards = document.querySelectorAll('div[data-test-target="HR_CC_CARD"]');
-
-          const reviews = [];
-
-          reviewCards.forEach(card => {
-            let title = '';
-            const titleEl = card.querySelector('[data-test-target="review-title"]');
-            if (titleEl) title = titleEl.textContent?.trim() || '';
-
-            let text = '';
-            // Review text is usually in a div/span after the title
-            const textEl = card.querySelector('[data-test-target="review-text"]');
-            if (textEl) {
-              text = textEl.textContent?.trim() || '';
-            } else {
-              // Fallback: look for spans with substantial text
-              const allSpans = card.querySelectorAll('span');
-              for (const span of allSpans) {
-                const spanText = span.textContent?.trim() || '';
-                if (spanText.length > 100 && spanText.length < 5000) {
-                  text = spanText;
-                  break;
-                }
-              }
+          // Fallback: look for spans with substantial text
+          const allSpans = card.querySelectorAll('span');
+          for (const span of allSpans) {
+            const spanText = span.textContent?.trim() || '';
+            if (spanText.length > 100 && spanText.length < 5000) {
+              text = spanText;
+              break;
             }
-
-            let rating = 0;
-            // Rating bubbles have class like "ui_bubble_rating bubble_50" (5.0 rating)
-            const ratingEl = card.querySelector('[class*="bubble_rating"]');
-            if (ratingEl) {
-              const match = ratingEl.className.match(/bubble_(\d+)/);
-              if (match) rating = parseInt(match[1]) / 10;
-            }
-
-            let date = '';
-            const dateEl = card.querySelector('[data-test-target="review-date"], time');
-            if (dateEl) date = dateEl.textContent?.trim() || '';
-
-            let reviewer = '';
-            // Reviewer name is often in a link to profile
-            const nameEl = card.querySelector('a[href*="/Profile/"]');
-            if (nameEl) {
-              const nameDiv = nameEl.querySelector('span, div');
-              if (nameDiv) reviewer = nameDiv.textContent?.trim() || '';
-            }
-
-            if (text && text.length > 20) {
-              reviews.push({ title, text, rating, date, reviewer });
-            }
-          });
-
-          return reviews;
-        });
-
-        console.log(`    ✓ ${pageReviews.length} reviews`);
-        allReviews = allReviews.concat(pageReviews);
-
-        // Try to find next page
-        const nextButton = await page.$('[data-automation="pagination-next"], a.next, a[aria-label*="Next"]');
-
-        if (nextButton) {
-          const isDisabled = await nextButton.evaluate(btn =>
-            btn.disabled || btn.classList.contains('disabled') || btn.getAttribute('aria-disabled') === 'true'
-          );
-
-          if (!isDisabled) {
-            try {
-              await nextButton.click();
-              await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
-
-              // Check for CAPTCHA after navigation
-              try {
-                const { status } = await client.send('Captcha.waitForSolve', {
-                  detectTimeout: 3000,
-                });
-                if (status !== 'none') {
-                  console.log(`    ✓ CAPTCHA ${status}`);
-                }
-              } catch (e) {
-                // No CAPTCHA or error - continue
-              }
-
-              currentPage++;
-            } catch (navError) {
-              // Navigation failed (likely quota limit), stop pagination for this hotel
-              console.log(`    ⚠️ Pagination stopped: ${navError.message}`);
-              hasMorePages = false;
-            }
-          } else {
-            hasMorePages = false;
           }
-        } else {
-          hasMorePages = false;
         }
 
-      } catch (error) {
-        console.log(`    ⚠️ ${error.message}`);
-        hasMorePages = false;
-      }
-    }
+        let rating = 0;
+        // Rating bubbles have class like "ui_bubble_rating bubble_50" (5.0 rating)
+        const ratingEl = card.querySelector('[class*="bubble_rating"]');
+        if (ratingEl) {
+          const match = ratingEl.className.match(/bubble_(\d+)/);
+          if (match) rating = parseInt(match[1]) / 10;
+        }
+
+        let date = '';
+        const dateEl = card.querySelector('[data-test-target="review-date"], time');
+        if (dateEl) date = dateEl.textContent?.trim() || '';
+
+        let reviewer = '';
+        // Reviewer name is often in a link to profile
+        const nameEl = card.querySelector('a[href*="/Profile/"]');
+        if (nameEl) {
+          const nameDiv = nameEl.querySelector('span, div');
+          if (nameDiv) reviewer = nameDiv.textContent?.trim() || '';
+        }
+
+        if (text && text.length > 20) {
+          reviews.push({ title, text, rating, date, reviewer });
+        }
+      });
+
+      return reviews;
+    });
 
     await browser.close();
-    console.log(`    ✓ Browser session closed`);
-    return allReviews;
+    return pageReviews;
 
   } catch (error) {
     console.error(`    ❌ ${error.message}`);
@@ -242,39 +225,71 @@ async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
   }
 }
 
+async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
+  let allReviews = [];
+  const endPage = startPage + maxPages - 1;
+  let consecutiveEmptyPages = 0;
+  const MAX_EMPTY_PAGES = 3; // Stop after 3 consecutive pages with no reviews
+
+  for (let currentPage = startPage; currentPage <= endPage; currentPage++) {
+    console.log(`    Page ${currentPage}...`);
+
+    try {
+      const pageReviews = await extractSinglePageWithFreshBrowser(hotelUrl, currentPage);
+
+      console.log(`    ✓ ${pageReviews.length} reviews`);
+      allReviews = allReviews.concat(pageReviews);
+
+      // Track consecutive empty pages
+      if (pageReviews.length === 0) {
+        consecutiveEmptyPages++;
+        console.log(`    ⚠️ No reviews found (${consecutiveEmptyPages}/${MAX_EMPTY_PAGES} empty pages)`);
+
+        // Stop if we've hit 3 consecutive empty pages
+        if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
+          console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive pages with no reviews, stopping pagination`);
+          break;
+        }
+      } else {
+        // Reset counter if we found reviews
+        consecutiveEmptyPages = 0;
+      }
+
+      // Wait between pages
+      if (currentPage < endPage) {
+        await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
+      }
+
+    } catch (error) {
+      console.log(`    ⚠️ ${error.message}`);
+      consecutiveEmptyPages++;
+
+      // Stop if we've hit too many consecutive errors/empty pages
+      if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
+        console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive errors, stopping pagination`);
+        break;
+      }
+      continue;
+    }
+  }
+
+  console.log(`    ✓ Session complete: ${allReviews.length} reviews extracted`);
+  return allReviews;
+}
+
 async function processHotelWithFreshBrowser(hotel, hotelIndex, totalHotels) {
   console.log(`\n[${hotelIndex + 1}/${totalHotels}] ${hotel.name}`);
   console.log(`  📖 Extracting up to ${CONFIG.MAX_REVIEW_PAGES} pages (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
-  console.log(`  🔄 Using fresh browser every 25 pages (4 browser sessions total)\n`);
-
-  const PAGES_PER_BROWSER = 25;
-  const totalSessions = Math.ceil(CONFIG.MAX_REVIEW_PAGES / PAGES_PER_BROWSER);
-  let allReviews = [];
+  console.log(`  🔄 Using fresh browser for EACH page\n`);
 
   try {
-    for (let session = 0; session < totalSessions; session++) {
-      const startPage = session * PAGES_PER_BROWSER + 1;
-      const pagesInThisSession = Math.min(PAGES_PER_BROWSER, CONFIG.MAX_REVIEW_PAGES - (session * PAGES_PER_BROWSER));
-
-      console.log(`  🔌 Browser Session ${session + 1}/${totalSessions}: Pages ${startPage}-${startPage + pagesInThisSession - 1}`);
-
-      const sessionReviews = await extractReviewsWithFreshBrowser(hotel.url, startPage, pagesInThisSession);
-      allReviews = allReviews.concat(sessionReviews);
-
-      console.log(`    ✓ Session ${session + 1} complete: ${sessionReviews.length} reviews`);
-
-      // Wait between sessions
-      if (session < totalSessions - 1) {
-        await delay(2000);
-      }
-    }
-
-    console.log(`  ✅ Total: ${allReviews.length} reviews from ${totalSessions} browser sessions`);
+    const allReviews = await extractReviewsWithFreshBrowser(hotel.url, 1, CONFIG.MAX_REVIEW_PAGES);
+    console.log(`  ✅ Total: ${allReviews.length} reviews extracted`);
     return allReviews;
 
   } catch (error) {
     console.error(`  ❌ Error processing hotel: ${error.message}`);
-    return allReviews; // Return what we got so far
+    return [];
   }
 }
 
@@ -375,6 +390,13 @@ async function main() {
         console.log(`  📊 ${JSON.stringify(mentionBreakdown)}`);
       }
 
+      // Save individual hotel file
+      saveHotelReviews(hotel, reviews, {
+        reviewsWithMentions,
+        totalMentions,
+        mentionBreakdown
+      });
+
       saveResults(results, 'reviews-progress.json');
 
       if (i < hotels.length - 1) {
@@ -420,8 +442,11 @@ async function main() {
     console.log(`   Started: ${new Date(startTime).toLocaleTimeString()}`);
     console.log(`   Finished: ${new Date(endTime).toLocaleTimeString()}`);
     console.log(`   Average: ${(totalSeconds / summary.totalHotelsScraped).toFixed(1)}s per hotel`);
-    console.log(`\n📁 Results saved to: ./${CONFIG.RESULTS_DIR}/`);
-    console.log(`✅ All ${hotels.length} hotels have been processed!\n`);
+    console.log(`\n📁 Results saved to:`);
+    console.log(`   Combined: ./${CONFIG.RESULTS_DIR}/reviews-final.json`);
+    console.log(`   Individual: ./${CONFIG.REVIEWS_DIR}/ (${summary.totalHotelsScraped} hotel files)`);
+    console.log(`   Summary: ./${CONFIG.RESULTS_DIR}/reviews-summary.json`);
+    console.log(`\n✅ All ${hotels.length} hotels have been processed!\n`);
 
   } catch (error) {
     console.error('\n❌ Error:', error.message);

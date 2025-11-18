@@ -16,12 +16,11 @@ const CONFIG = {
     'https://www.tripadvisor.co.uk/Hotels-g45963-oa30-a_travelersChoice.1-Las_Vegas_Nevada-Hotels.html' // Next 20 hotels
   ],
   HOTELS_PER_PAGE: 30,  // First page has 30 hotels
-  MAX_HOTELS: 1,  // Total target: 50 hotels
+  MAX_HOTELS: 50,  // Total target: 50 hotels
   RESULTS_DIR: './results',
 };
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-const randomDelay = (min, max) => delay(Math.floor(Math.random() * (max - min + 1) + min));
 
 function saveResults(data, filename) {
   if (!fs.existsSync(CONFIG.RESULTS_DIR)) {
@@ -112,7 +111,7 @@ async function extractHotelsFromURL(url, pageNum) {
 
     browser = await puppeteer.connect({
       browserWSEndpoint,
-      timeout: 60000
+      timeout: 15000
     });
 
     const page = await browser.newPage();
@@ -121,21 +120,21 @@ async function extractHotelsFromURL(url, pageNum) {
     console.log(`   ✓ Connected! Loading ${url}`);
 
     await page.goto(url, {
-      timeout: 120000,
+      timeout: 30000,
       waitUntil: 'domcontentloaded'
     });
 
     console.log('   ⏳ Checking for CAPTCHA...');
     try {
       const { status } = await client.send('Captcha.waitForSolve', {
-        detectTimeout: 10000,
+        detectTimeout: 2000,
       });
       console.log(`   ✓ CAPTCHA status: ${status}`);
     } catch (e) {
       console.log('   ✓ No CAPTCHA detected');
     }
 
-    await delay(3000);
+    await delay(500);
 
     const pageHotels = await extractHotelsFromCurrentPage(page);
 
@@ -187,7 +186,7 @@ async function extractHotelList() {
 
   // Page 2: Get remaining hotels (20 more to reach 50)
   if (allHotels.length < CONFIG.MAX_HOTELS) {
-    await delay(2000);
+    await delay(500);
 
     const remaining = CONFIG.MAX_HOTELS - allHotels.length;
     console.log(`\n📄 Page 2: Extracting remaining ${remaining} hotels...`);
