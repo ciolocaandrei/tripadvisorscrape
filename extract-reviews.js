@@ -57,7 +57,7 @@ function countCelebrityMentions(text) {
 }
 
 async function extractHotelReviews(page, client, hotelUrl, hotelName) {
-  console.log(`\n📖 ${hotelName}`);
+  console.log(`  📖 Extracting reviews...`);
 
   try {
     // Try to navigate - if it fails, return empty reviews
@@ -213,10 +213,49 @@ async function extractHotelReviews(page, client, hotelUrl, hotelName) {
   }
 }
 
+async function processHotelWithFreshBrowser(hotel, hotelIndex, totalHotels) {
+  const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
+  let browser;
+
+  try {
+    console.log(`\n[${hotelIndex + 1}/${totalHotels}] ${hotel.name}`);
+    console.log(`  🔌 Connecting to fresh browser session...`);
+
+    browser = await puppeteer.connect({
+      browserWSEndpoint,
+      timeout: 60000
+    });
+
+    const page = await browser.newPage();
+    const client = await page.createCDPSession();
+
+    console.log(`  ✓ Connected!`);
+
+    const reviews = await extractHotelReviews(page, client, hotel.url, hotel.name);
+
+    await browser.close();
+    console.log(`  ✓ Browser closed`);
+
+    return reviews;
+
+  } catch (error) {
+    console.error(`  ❌ Error processing hotel: ${error.message}`);
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+    }
+    return [];
+  }
+}
+
 async function main() {
   console.log('╔════════════════════════════════════════════════════════╗');
   console.log('║  Step 2: Extract Reviews from Hotel List              ║');
   console.log('║  Bright Data Scraping Browser                          ║');
+  console.log('║  (Fresh browser connection per hotel)                  ║');
   console.log('╚════════════════════════════════════════════════════════╝\n');
 
   // Load hotel list
@@ -233,49 +272,36 @@ async function main() {
   console.log(`   Hotels to process: ${hotels.length}`);
   console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel`);
   console.log(`   Keywords: ${CONFIG.CELEBRITY_KEYWORDS.join(', ')}`);
-  console.log('\n🔌 Connecting to Scraping Browser...');
 
-  const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
-
-  let browser;
-  try {
-    browser = await puppeteer.connect({
-      browserWSEndpoint,
-      timeout: 60000
-    });
-
-    console.log('✓ Connected to Scraping Browser!\n');
-
-    const page = await browser.newPage();
-    const client = await page.createCDPSession();
-
-    // Load existing results if they exist
-    let results = [];
-    const progressFile = path.join(CONFIG.RESULTS_DIR, 'reviews-progress.json');
-    if (fs.existsSync(progressFile)) {
-      try {
-        results = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
-        console.log(`✓ Loaded ${results.length} existing results\n`);
-      } catch (e) {
-        console.log(`⚠️ Could not load existing results: ${e.message}\n`);
-      }
+  // Load existing results if they exist
+  let results = [];
+  const progressFile = path.join(CONFIG.RESULTS_DIR, 'reviews-progress.json');
+  if (fs.existsSync(progressFile)) {
+    try {
+      results = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+      console.log(`✓ Loaded ${results.length} existing results\n`);
+    } catch (e) {
+      console.log(`⚠️ Could not load existing results: ${e.message}\n`);
     }
+  }
 
-    // Process all hotels
-    console.log(`📊 Processing all ${hotels.length} hotels\n`);
+  // Process all hotels
+  console.log(`📊 Processing all ${hotels.length} hotels\n`);
+  console.log(`🔄 Each hotel gets a fresh browser connection\n`);
 
+  try {
     for (let i = 0; i < hotels.length; i++) {
       const hotel = hotels[i];
-      console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
 
       // Skip if already processed
       const existingResult = results.find(r => r.url === hotel.url);
       if (existingResult && existingResult.totalReviews > 0) {
+        console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
         console.log(`  ⏭️  Already processed (${existingResult.totalReviews} reviews)`);
         continue;
       }
 
-      const reviews = await extractHotelReviews(page, client, hotel.url, hotel.name);
+      const reviews = await processHotelWithFreshBrowser(hotel, i, hotels.length);
 
       let totalMentions = 0;
       const mentionBreakdown = {};
@@ -358,11 +384,6 @@ async function main() {
   } catch (error) {
     console.error('\n❌ Error:', error.message);
     console.error(error.stack);
-  } finally {
-    if (browser) {
-      await browser.close();
-      console.log('✓ Browser closed');
-    }
   }
 }
 
