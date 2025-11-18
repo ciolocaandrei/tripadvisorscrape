@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node scraping-browser.js && node extract-reviews.js",
-    "reviews": "node extract-reviews.js"
+    "reviews": "node extract-reviews.js",
+    "export": "node export-to-csv.js"
   },
   "keywords": [
     "tripadvisor",

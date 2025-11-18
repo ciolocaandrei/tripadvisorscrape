@@ -16,7 +16,7 @@ const CONFIG = {
     'https://www.tripadvisor.co.uk/Hotels-g45963-oa30-a_travelersChoice.1-Las_Vegas_Nevada-Hotels.html' // Next 20 hotels
   ],
   HOTELS_PER_PAGE: 30,  // First page has 30 hotels
-  MAX_HOTELS: 50,  // Total target: 50 hotels
+  MAX_HOTELS: 1,  // Total target: 50 hotels
   RESULTS_DIR: './results',
 };
 

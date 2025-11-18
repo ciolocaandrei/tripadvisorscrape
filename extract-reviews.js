@@ -18,7 +18,7 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_REVIEW_PAGES: 10,  // Max pages of reviews per hotel (50 hotels × 10 pages = 500 total)
+  MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 3000,
   DELAY_BETWEEN_PAGES: 3000,
@@ -56,25 +56,24 @@ function countCelebrityMentions(text) {
   return { total, breakdown };
 }
 
-async function extractHotelReviews(page, client, hotelUrl, hotelName) {
-  console.log(`  📖 Extracting reviews...`);
+async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
+  const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
+  let browser;
 
   try {
-    // Try to navigate - if it fails, return empty reviews
-    let navigationFailed = false;
+    browser = await puppeteer.connect({
+      browserWSEndpoint,
+      timeout: 60000
+    });
+
+    const page = await browser.newPage();
+    const client = await page.createCDPSession();
+
+    // Navigate to hotel URL
     await page.goto(hotelUrl, {
       timeout: 120000,
       waitUntil: 'domcontentloaded'
-    }).catch(err => {
-      console.log(`  ⚠️ Navigation failed: ${err.message}`);
-      navigationFailed = true;
     });
-
-    // If navigation failed, return empty array
-    if (navigationFailed) {
-      console.log(`  ⏭️  Skipping hotel due to navigation failure`);
-      return [];
-    }
 
     // Check for CAPTCHA
     try {
@@ -82,20 +81,42 @@ async function extractHotelReviews(page, client, hotelUrl, hotelName) {
         detectTimeout: 5000,
       });
       if (status !== 'none') {
-        console.log(`  ✓ CAPTCHA ${status}`);
+        console.log(`    ✓ CAPTCHA ${status}`);
       }
     } catch (e) {
-      // No CAPTCHA or error - continue
+      // No CAPTCHA
     }
 
     await randomDelay(2000, 4000);
 
     let allReviews = [];
-    let currentPage = 1;
+    let currentPage = startPage;
     let hasMorePages = true;
+    const endPage = startPage + maxPages - 1;
 
-    while (hasMorePages && currentPage <= CONFIG.MAX_REVIEW_PAGES) {
-      console.log(`  Page ${currentPage}...`);
+    // If not starting from page 1, navigate to the correct page
+    if (startPage > 1) {
+      const paginationNeeded = startPage - 1;
+      for (let i = 0; i < paginationNeeded; i++) {
+        const nextButton = await page.$('[data-automation="pagination-next"], a.next, a[aria-label*="Next"]');
+        if (nextButton) {
+          const isDisabled = await nextButton.evaluate(btn =>
+            btn.disabled || btn.classList.contains('disabled') || btn.getAttribute('aria-disabled') === 'true'
+          );
+          if (!isDisabled) {
+            await nextButton.click();
+            await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+    }
+
+    while (hasMorePages && currentPage <= endPage) {
+      console.log(`    Page ${currentPage}...`);
 
       try {
         await page.waitForSelector('[class*="review"], div', { timeout: 8000 });
@@ -204,50 +225,56 @@ async function extractHotelReviews(page, client, hotelUrl, hotelName) {
       }
     }
 
-    console.log(`  ✅ Total: ${allReviews.length} reviews`);
+    await browser.close();
+    console.log(`    ✓ Browser session closed`);
     return allReviews;
 
   } catch (error) {
-    console.error(`  ❌ ${error.message}`);
+    console.error(`    ❌ ${error.message}`);
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {
+        // Ignore
+      }
+    }
     return [];
   }
 }
 
 async function processHotelWithFreshBrowser(hotel, hotelIndex, totalHotels) {
-  const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
-  let browser;
+  console.log(`\n[${hotelIndex + 1}/${totalHotels}] ${hotel.name}`);
+  console.log(`  📖 Extracting up to ${CONFIG.MAX_REVIEW_PAGES} pages (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
+  console.log(`  🔄 Using fresh browser every 25 pages (4 browser sessions total)\n`);
+
+  const PAGES_PER_BROWSER = 25;
+  const totalSessions = Math.ceil(CONFIG.MAX_REVIEW_PAGES / PAGES_PER_BROWSER);
+  let allReviews = [];
 
   try {
-    console.log(`\n[${hotelIndex + 1}/${totalHotels}] ${hotel.name}`);
-    console.log(`  🔌 Connecting to fresh browser session...`);
+    for (let session = 0; session < totalSessions; session++) {
+      const startPage = session * PAGES_PER_BROWSER + 1;
+      const pagesInThisSession = Math.min(PAGES_PER_BROWSER, CONFIG.MAX_REVIEW_PAGES - (session * PAGES_PER_BROWSER));
 
-    browser = await puppeteer.connect({
-      browserWSEndpoint,
-      timeout: 60000
-    });
+      console.log(`  🔌 Browser Session ${session + 1}/${totalSessions}: Pages ${startPage}-${startPage + pagesInThisSession - 1}`);
 
-    const page = await browser.newPage();
-    const client = await page.createCDPSession();
+      const sessionReviews = await extractReviewsWithFreshBrowser(hotel.url, startPage, pagesInThisSession);
+      allReviews = allReviews.concat(sessionReviews);
 
-    console.log(`  ✓ Connected!`);
+      console.log(`    ✓ Session ${session + 1} complete: ${sessionReviews.length} reviews`);
 
-    const reviews = await extractHotelReviews(page, client, hotel.url, hotel.name);
+      // Wait between sessions
+      if (session < totalSessions - 1) {
+        await delay(2000);
+      }
+    }
 
-    await browser.close();
-    console.log(`  ✓ Browser closed`);
-
-    return reviews;
+    console.log(`  ✅ Total: ${allReviews.length} reviews from ${totalSessions} browser sessions`);
+    return allReviews;
 
   } catch (error) {
     console.error(`  ❌ Error processing hotel: ${error.message}`);
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (e) {
-        // Ignore close errors
-      }
-    }
-    return [];
+    return allReviews; // Return what we got so far
   }
 }
 
@@ -270,8 +297,9 @@ async function main() {
 
   console.log('📋 Config:');
   console.log(`   Hotels to process: ${hotels.length}`);
-  console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel`);
+  console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
   console.log(`   Keywords: ${CONFIG.CELEBRITY_KEYWORDS.join(', ')}`);
+  console.log(`   Estimated total reviews: ~${hotels.length * CONFIG.MAX_REVIEW_PAGES * 10}`);
 
   // Load existing results if they exist
   let results = [];
@@ -285,9 +313,11 @@ async function main() {
     }
   }
 
-  // Process all hotels
+  // Start execution timer
+  const startTime = Date.now();
   console.log(`📊 Processing all ${hotels.length} hotels\n`);
   console.log(`🔄 Each hotel gets a fresh browser connection\n`);
+  console.log(`⏱️  Started at: ${new Date().toLocaleTimeString()}\n`);
 
   try {
     for (let i = 0; i < hotels.length; i++) {
@@ -367,6 +397,13 @@ async function main() {
     saveResults(results, 'reviews-final.json');
     saveResults(summary, 'reviews-summary.json');
 
+    // Calculate execution time
+    const endTime = Date.now();
+    const totalSeconds = Math.floor((endTime - startTime) / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
     console.log('\n' + '═'.repeat(60));
     console.log('✅ REVIEW EXTRACTION COMPLETED!');
     console.log('═'.repeat(60));
@@ -378,6 +415,11 @@ async function main() {
     summary.topHotelsByMentions.slice(0, 5).forEach((h, i) => {
       console.log(`   ${i + 1}. ${h.name} - ${h.mentions} mentions`);
     });
+    console.log(`\n⏱️  Execution Time:`);
+    console.log(`   Total: ${hours}h ${minutes}m ${seconds}s`);
+    console.log(`   Started: ${new Date(startTime).toLocaleTimeString()}`);
+    console.log(`   Finished: ${new Date(endTime).toLocaleTimeString()}`);
+    console.log(`   Average: ${(totalSeconds / summary.totalHotelsScraped).toFixed(1)}s per hotel`);
     console.log(`\n📁 Results saved to: ./${CONFIG.RESULTS_DIR}/`);
     console.log(`✅ All ${hotels.length} hotels have been processed!\n`);
 
