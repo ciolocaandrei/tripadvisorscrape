@@ -1,15 +1,16 @@
 /**
  * Export Reviews to CSV
  *
- * Reads the reviews from reviews-final.json or reviews-progress.json
+ * Reads individual hotel review files from results/reviews/
  * and exports them to a CSV file
  */
 
 import fs from 'fs';
+import path from 'path';
 
 const CONFIG = {
   RESULTS_DIR: './results',
-  INPUT_FILE: './results/reviews-final.json', // Change to reviews-progress.json if needed
+  REVIEWS_DIR: './results/reviews',
   OUTPUT_FILE: './results/reviews-export.csv',
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
 };
@@ -77,17 +78,39 @@ function main() {
   });
   console.log();
 
-  // Check if input file exists
-  if (!fs.existsSync(CONFIG.INPUT_FILE)) {
-    console.error(`❌ Input file not found: ${CONFIG.INPUT_FILE}`);
+  // Check if reviews directory exists
+  if (!fs.existsSync(CONFIG.REVIEWS_DIR)) {
+    console.error(`❌ Reviews directory not found: ${CONFIG.REVIEWS_DIR}`);
     console.error('   Run the scraper first to extract reviews!\n');
     process.exit(1);
   }
 
-  console.log(`📖 Reading reviews from: ${CONFIG.INPUT_FILE}`);
+  console.log(`📖 Reading hotel review files from: ${CONFIG.REVIEWS_DIR}`);
 
-  // Read the JSON file
-  const data = JSON.parse(fs.readFileSync(CONFIG.INPUT_FILE, 'utf8'));
+  // Read all JSON files from reviews directory
+  const files = fs.readdirSync(CONFIG.REVIEWS_DIR)
+    .filter(file => file.endsWith('.json'))
+    .sort(); // Sort by filename to maintain rank order
+
+  if (files.length === 0) {
+    console.error(`❌ No review files found in: ${CONFIG.REVIEWS_DIR}`);
+    console.error('   Run the scraper first to extract reviews!\n');
+    process.exit(1);
+  }
+
+  console.log(`✓ Found ${files.length} hotel review files`);
+
+  // Load all hotel data from individual files
+  const data = [];
+  for (const file of files) {
+    const filepath = path.join(CONFIG.REVIEWS_DIR, file);
+    const hotelData = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    data.push(hotelData);
+  }
+
+  // Sort by rank to ensure correct order
+  data.sort((a, b) => a.rank - b.rank);
+
   console.log(`✓ Loaded ${data.length} hotels\n`);
 
   // Count total reviews and celebrity mentions
