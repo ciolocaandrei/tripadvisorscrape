@@ -18,17 +18,31 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_REVIEW_PAGES: 30,  // Max pages of reviews per hotel (~1000 reviews per hotel)
+  MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 100,
   DELAY_BETWEEN_PAGES: 100,
   RESULTS_DIR: './results',
   REVIEWS_DIR: './results/reviews',  // Individual hotel review files
+  PROGRESS_DIR: './results/progress',  // Individual hotel progress files
   HOTELS_FILE: './results/hotels-list.json',  // Read from existing hotel list
 };
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const randomDelay = (min, max) => delay(Math.floor(Math.random() * (max - min + 1) + min));
+
+function formatTime(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
 
 function saveResults(data, filename) {
   if (!fs.existsSync(CONFIG.RESULTS_DIR)) {
@@ -71,6 +85,100 @@ function saveHotelReviews(hotel, reviews, celebrityData) {
 
   fs.writeFileSync(filepath, JSON.stringify(hotelData, null, 2));
   console.log(`  💾 Saved to: ${filename}`);
+}
+
+// Generate a filename-safe ID from hotel URL
+function getHotelId(hotelUrl) {
+  // Extract hotel ID from URL like: Hotel_Review-g45963-d4790631-Reviews-Downtown_Grand_Hotel
+  const match = hotelUrl.match(/Hotel_Review-([^.]+)/);
+  if (match) {
+    return match[1].replace(/-Reviews.*$/, '');
+  }
+  // Fallback: hash the URL
+  return hotelUrl.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+}
+
+function getHotelProgressFile(hotelUrl) {
+  return path.join(CONFIG.PROGRESS_DIR, `${getHotelId(hotelUrl)}.json`);
+}
+
+// Page progress tracking functions (per hotel file)
+function loadHotelProgress(hotelUrl) {
+  const progressFile = getHotelProgressFile(hotelUrl);
+  if (fs.existsSync(progressFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+    } catch (e) {
+      console.log(`⚠️ Could not load progress for hotel: ${e.message}`);
+    }
+  }
+  return { lastCompletedPage: 0, reviews: [], startTime: null, elapsedTime: 0, pageTimes: {} };
+}
+
+function saveHotelProgress(hotelUrl, progress) {
+  if (!fs.existsSync(CONFIG.PROGRESS_DIR)) {
+    fs.mkdirSync(CONFIG.PROGRESS_DIR, { recursive: true });
+  }
+  const progressFile = getHotelProgressFile(hotelUrl);
+  fs.writeFileSync(progressFile, JSON.stringify(progress, null, 2));
+}
+
+function getHotelPageProgress(pageProgress, hotelUrl) {
+  return loadHotelProgress(hotelUrl);
+}
+
+function updateHotelPageProgress(pageProgress, hotelUrl, pageNum, allReviewsSoFar, elapsedTime, pageTimeData) {
+  let progress = loadHotelProgress(hotelUrl);
+
+  progress.hotelUrl = hotelUrl;
+  progress.lastCompletedPage = pageNum;
+  progress.reviews = allReviewsSoFar;
+  progress.elapsedTime = elapsedTime;
+  progress.elapsedMinutes = (elapsedTime / 1000 / 60).toFixed(2);
+  progress.totalMinutes = (elapsedTime / 1000 / 60).toFixed(2);
+
+  // Track time per page
+  if (pageTimeData) {
+    if (!progress.pageTimes) {
+      progress.pageTimes = {};
+    }
+    progress.pageTimes[`page_${pageNum}`] = {
+      startTime: pageTimeData.startTime,
+      endTime: pageTimeData.endTime,
+      durationMinutes: (pageTimeData.durationMs / 1000 / 60).toFixed(2)
+    };
+  }
+
+  progress.lastUpdated = new Date().toISOString();
+  saveHotelProgress(hotelUrl, progress);
+}
+
+function initHotelPageProgress(pageProgress, hotelUrl) {
+  const progressFile = getHotelProgressFile(hotelUrl);
+  console.log(`    📁 Progress file: ${progressFile}`);
+
+  let progress = loadHotelProgress(hotelUrl);
+  console.log(`    📁 Loaded progress: lastCompletedPage=${progress.lastCompletedPage}, reviews=${progress.reviews?.length || 0}, startTime=${progress.startTime}`);
+
+  if (!progress.startTime) {
+    progress = {
+      hotelUrl: hotelUrl,
+      lastCompletedPage: 0,
+      reviews: [],
+      startTime: Date.now(),
+      elapsedTime: 0,
+      pageTimes: {}
+    };
+    saveHotelProgress(hotelUrl, progress);
+  }
+  return progress;
+}
+
+function clearHotelPageProgress(hotelUrl) {
+  const progressFile = getHotelProgressFile(hotelUrl);
+  if (fs.existsSync(progressFile)) {
+    fs.unlinkSync(progressFile);
+  }
 }
 
 function countCelebrityMentions(text) {
@@ -225,20 +333,57 @@ async function extractSinglePageWithFreshBrowser(hotelUrl, pageNum) {
   }
 }
 
-async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
-  let allReviews = [];
+async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages, pageProgress) {
+  // Initialize or get existing page progress
+  const hotelProgress = initHotelPageProgress(pageProgress, hotelUrl);
+  let allReviews = hotelProgress.reviews || [];
+  const resumeFromPage = hotelProgress.lastCompletedPage + 1;
+  const previousElapsedTime = hotelProgress.elapsedTime || 0;
+
+  // Track time for this session
+  const sessionStartTime = Date.now();
+
+  // Determine actual start page (resume from where we left off)
+  const actualStartPage = resumeFromPage > startPage ? resumeFromPage : startPage;
   const endPage = startPage + maxPages - 1;
+
+  if (actualStartPage > startPage) {
+    const prevTimeStr = formatTime(previousElapsedTime);
+    console.log(`    📂 Resuming from page ${actualStartPage} (${allReviews.length} reviews, ${prevTimeStr} elapsed)`);
+  }
+
   let consecutiveEmptyPages = 0;
   const MAX_EMPTY_PAGES = 3; // Stop after 3 consecutive pages with no reviews
 
-  for (let currentPage = startPage; currentPage <= endPage; currentPage++) {
+  for (let currentPage = actualStartPage; currentPage <= endPage; currentPage++) {
     console.log(`    Page ${currentPage}...`);
+
+    // Track page start time
+    const pageStartTime = Date.now();
 
     try {
       const pageReviews = await extractSinglePageWithFreshBrowser(hotelUrl, currentPage);
 
+      // Track page end time
+      const pageEndTime = Date.now();
+
       console.log(`    ✓ ${pageReviews.length} reviews`);
       allReviews = allReviews.concat(pageReviews);
+
+      // Calculate total elapsed time (previous + current session)
+      const currentSessionTime = Date.now() - sessionStartTime;
+      const totalElapsedTime = previousElapsedTime + currentSessionTime;
+
+      // Page time data
+      const pageTimeData = {
+        startTime: new Date(pageStartTime).toISOString(),
+        endTime: new Date(pageEndTime).toISOString(),
+        durationMs: pageEndTime - pageStartTime
+      };
+
+      // Save page progress after each successful page (pass ALL reviews so far)
+      updateHotelPageProgress(pageProgress, hotelUrl, currentPage, allReviews, totalElapsedTime, pageTimeData);
+      console.log(`    💾 Progress saved (page ${currentPage}, ${allReviews.length} reviews, ${formatTime(totalElapsedTime)} total)`);
 
       // Track consecutive empty pages
       if (pageReviews.length === 0) {
@@ -273,23 +418,32 @@ async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages) {
     }
   }
 
-  console.log(`    ✓ Session complete: ${allReviews.length} reviews extracted`);
-  return allReviews;
+  // Calculate final total time
+  const finalSessionTime = Date.now() - sessionStartTime;
+  const totalTime = previousElapsedTime + finalSessionTime;
+
+  console.log(`    ✓ Session complete: ${allReviews.length} reviews extracted in ${formatTime(totalTime)}`);
+  return { reviews: allReviews, totalTime };
 }
 
-async function processHotelWithFreshBrowser(hotel, hotelIndex, totalHotels) {
+async function processHotelWithFreshBrowser(hotel, hotelIndex, totalHotels, pageProgress) {
   console.log(`\n[${hotelIndex + 1}/${totalHotels}] ${hotel.name}`);
   console.log(`  📖 Extracting up to ${CONFIG.MAX_REVIEW_PAGES} pages (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
   console.log(`  🔄 Using fresh browser for EACH page\n`);
 
   try {
-    const allReviews = await extractReviewsWithFreshBrowser(hotel.url, 1, CONFIG.MAX_REVIEW_PAGES);
-    console.log(`  ✅ Total: ${allReviews.length} reviews extracted`);
-    return allReviews;
+    const result = await extractReviewsWithFreshBrowser(hotel.url, 1, CONFIG.MAX_REVIEW_PAGES, pageProgress);
+    const { reviews: allReviews, totalTime } = result;
+    console.log(`  ✅ Total: ${allReviews.length} reviews extracted in ${formatTime(totalTime)}`);
+
+    // Clear page progress for this hotel once fully complete
+    clearHotelPageProgress(hotel.url);
+
+    return { reviews: allReviews, totalTime };
 
   } catch (error) {
     console.error(`  ❌ Error processing hotel: ${error.message}`);
-    return [];
+    return { reviews: [], totalTime: 0 };
   }
 }
 
@@ -328,6 +482,15 @@ async function main() {
     }
   }
 
+  // Check progress directory for resumable hotels
+  const pageProgress = {}; // Now each hotel has its own file
+  if (fs.existsSync(CONFIG.PROGRESS_DIR)) {
+    const progressFiles = fs.readdirSync(CONFIG.PROGRESS_DIR).filter(f => f.endsWith('.json'));
+    if (progressFiles.length > 0) {
+      console.log(`📂 Found progress files for ${progressFiles.length} hotel(s) - will resume where left off\n`);
+    }
+  }
+
   // Start execution timer
   const startTime = Date.now();
   console.log(`📊 Processing all ${hotels.length} hotels\n`);
@@ -346,7 +509,8 @@ async function main() {
         continue;
       }
 
-      const reviews = await processHotelWithFreshBrowser(hotel, i, hotels.length);
+      const result = await processHotelWithFreshBrowser(hotel, i, hotels.length, pageProgress);
+      const { reviews, totalTime } = result;
 
       let totalMentions = 0;
       const mentionBreakdown = {};
@@ -370,6 +534,8 @@ async function main() {
         name: hotel.name,
         url: hotel.url,
         totalReviews: reviews.length,
+        totalTimeMs: totalTime,
+        totalTimeFormatted: formatTime(totalTime),
         reviewsWithCelebrityMentions: reviewsWithMentions.length,
         totalCelebrityMentions: totalMentions,
         mentionBreakdown: mentionBreakdown,
@@ -385,6 +551,7 @@ async function main() {
         results.push(hotelResult);
       }
 
+      console.log(`  ⏱️  Time: ${formatTime(totalTime)}`);
       console.log(`  ⭐ Mentions: ${totalMentions} in ${reviewsWithMentions.length} reviews`);
       if (Object.keys(mentionBreakdown).length > 0) {
         console.log(`  📊 ${JSON.stringify(mentionBreakdown)}`);
