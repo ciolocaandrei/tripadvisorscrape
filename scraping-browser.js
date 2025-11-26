@@ -163,12 +163,12 @@ async function extractHotelList() {
   let allHotels = [];
   const seenUrls = new Set();
 
-  // Page 1: Get exactly 30 hotels
-  console.log('📄 Page 1: Extracting first 30 hotels...');
+  // Page 1: Get hotels up to MAX_HOTELS
+  console.log(`📄 Page 1: Extracting hotels (max ${CONFIG.MAX_HOTELS})...`);
   const page1Hotels = await extractHotelsFromURL(CONFIG.HOTEL_LIST_URLS[0], 1);
 
   let addedFromPage1 = 0;
-  for (let i = 0; i < page1Hotels.length && addedFromPage1 < 30; i++) {
+  for (let i = 0; i < page1Hotels.length && allHotels.length < CONFIG.MAX_HOTELS; i++) {
     const hotel = page1Hotels[i];
     if (!seenUrls.has(hotel.url)) {
       allHotels.push({
@@ -181,7 +181,7 @@ async function extractHotelList() {
     }
   }
 
-  console.log(`   ✓ Found ${page1Hotels.length} hotels, added ${addedFromPage1} (limit: 30)`);
+  console.log(`   ✓ Found ${page1Hotels.length} hotels, added ${addedFromPage1} (max: ${CONFIG.MAX_HOTELS})`);
   console.log(`   📊 Total so far: ${allHotels.length}/${CONFIG.MAX_HOTELS}`);
 
   // Page 2: Get remaining hotels (20 more to reach 50)

@@ -18,10 +18,13 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
+  MAX_HOTELS: 1,  // Limit to 1 hotel for testing
   MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 100,
   DELAY_BETWEEN_PAGES: 100,
+  PAGE_TIMEOUT: 2 * 60 * 1000,  // 2 minutes timeout per page
+  MAX_PAGE_RETRIES: 3,  // Max retries per page before skipping
   RESULTS_DIR: './results',
   REVIEWS_DIR: './results/reviews',  // Individual hotel review files
   PROGRESS_DIR: './results/progress',  // Individual hotel progress files
@@ -461,8 +464,14 @@ async function main() {
     process.exit(1);
   }
 
-  const hotels = JSON.parse(fs.readFileSync(CONFIG.HOTELS_FILE, 'utf8'));
+  let hotels = JSON.parse(fs.readFileSync(CONFIG.HOTELS_FILE, 'utf8'));
   console.log(`✓ Loaded ${hotels.length} hotels from ${CONFIG.HOTELS_FILE}\n`);
+
+  // Limit hotels if MAX_HOTELS is set
+  if (CONFIG.MAX_HOTELS && CONFIG.MAX_HOTELS < hotels.length) {
+    hotels = hotels.slice(0, CONFIG.MAX_HOTELS);
+    console.log(`⚠️  Limiting to first ${CONFIG.MAX_HOTELS} hotel(s) for testing\n`);
+  }
 
   console.log('📋 Config:');
   console.log(`   Hotels to process: ${hotels.length}`);
@@ -501,12 +510,22 @@ async function main() {
     for (let i = 0; i < hotels.length; i++) {
       const hotel = hotels[i];
 
-      // Skip if already processed
+      // Check if hotel has page progress (partial scrape) - should continue
+      const hotelProgress = loadHotelProgress(hotel.url);
+      const hasPartialProgress = hotelProgress.lastCompletedPage > 0 && hotelProgress.lastCompletedPage < CONFIG.MAX_REVIEW_PAGES;
+
+      // Skip only if fully completed (in results with reviews AND no partial progress)
       const existingResult = results.find(r => r.url === hotel.url);
-      if (existingResult && existingResult.totalReviews > 0) {
+      if (existingResult && existingResult.totalReviews > 0 && !hasPartialProgress) {
         console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
-        console.log(`  ⏭️  Already processed (${existingResult.totalReviews} reviews)`);
+        console.log(`  ⏭️  Already fully processed (${existingResult.totalReviews} reviews)`);
         continue;
+      }
+
+      // Show resume info if we have partial progress
+      if (hasPartialProgress) {
+        console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
+        console.log(`  📂 Resuming from page ${hotelProgress.lastCompletedPage + 1} (${hotelProgress.reviews?.length || 0} reviews so far)`);
       }
 
       const result = await processHotelWithFreshBrowser(hotel, i, hotels.length, pageProgress);
