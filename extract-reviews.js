@@ -18,7 +18,7 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_HOTELS: 1,  // Limit to 1 hotel for testing
+  MAX_HOTELS: 2,  // Limit to 1 hotel for testing
   MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 100,
@@ -33,6 +33,14 @@ const CONFIG = {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const randomDelay = (min, max) => delay(Math.floor(Math.random() * (max - min + 1) + min));
+
+// Helper to run a promise with timeout
+function withTimeout(promise, timeoutMs, errorMessage = 'Operation timed out') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(errorMessage)), timeoutMs))
+  ]);
+}
 
 function formatTime(ms) {
   const totalSeconds = Math.floor(ms / 1000);
@@ -361,63 +369,88 @@ async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages, pag
   for (let currentPage = actualStartPage; currentPage <= endPage; currentPage++) {
     console.log(`    Page ${currentPage}...`);
 
-    // Track page start time
-    const pageStartTime = Date.now();
+    let pageReviews = [];
+    let pageSuccess = false;
+    let retryCount = 0;
 
-    try {
-      const pageReviews = await extractSinglePageWithFreshBrowser(hotelUrl, currentPage);
+    // Retry loop for this page
+    while (retryCount < CONFIG.MAX_PAGE_RETRIES && !pageSuccess) {
+      // Track page start time
+      const pageStartTime = Date.now();
 
-      // Track page end time
-      const pageEndTime = Date.now();
+      try {
+        // Run with timeout
+        pageReviews = await withTimeout(
+          extractSinglePageWithFreshBrowser(hotelUrl, currentPage),
+          CONFIG.PAGE_TIMEOUT,
+          `Page ${currentPage} timed out after 2 minutes`
+        );
 
-      console.log(`    ✓ ${pageReviews.length} reviews`);
-      allReviews = allReviews.concat(pageReviews);
+        // Track page end time
+        const pageEndTime = Date.now();
 
-      // Calculate total elapsed time (previous + current session)
-      const currentSessionTime = Date.now() - sessionStartTime;
-      const totalElapsedTime = previousElapsedTime + currentSessionTime;
+        console.log(`    ✓ ${pageReviews.length} reviews`);
+        allReviews = allReviews.concat(pageReviews);
 
-      // Page time data
-      const pageTimeData = {
-        startTime: new Date(pageStartTime).toISOString(),
-        endTime: new Date(pageEndTime).toISOString(),
-        durationMs: pageEndTime - pageStartTime
-      };
+        // Calculate total elapsed time (previous + current session)
+        const currentSessionTime = Date.now() - sessionStartTime;
+        const totalElapsedTime = previousElapsedTime + currentSessionTime;
 
-      // Save page progress after each successful page (pass ALL reviews so far)
-      updateHotelPageProgress(pageProgress, hotelUrl, currentPage, allReviews, totalElapsedTime, pageTimeData);
-      console.log(`    💾 Progress saved (page ${currentPage}, ${allReviews.length} reviews, ${formatTime(totalElapsedTime)} total)`);
+        // Page time data
+        const pageTimeData = {
+          startTime: new Date(pageStartTime).toISOString(),
+          endTime: new Date(pageEndTime).toISOString(),
+          durationMs: pageEndTime - pageStartTime
+        };
 
-      // Track consecutive empty pages
-      if (pageReviews.length === 0) {
-        consecutiveEmptyPages++;
-        console.log(`    ⚠️ No reviews found (${consecutiveEmptyPages}/${MAX_EMPTY_PAGES} empty pages)`);
+        // Save page progress after each successful page (pass ALL reviews so far)
+        updateHotelPageProgress(pageProgress, hotelUrl, currentPage, allReviews, totalElapsedTime, pageTimeData);
+        console.log(`    💾 Progress saved (page ${currentPage}, ${allReviews.length} reviews, ${formatTime(totalElapsedTime)} total)`);
 
-        // Stop if we've hit 3 consecutive empty pages
-        if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
-          console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive pages with no reviews, stopping pagination`);
-          break;
+        pageSuccess = true;
+
+        // Track consecutive empty pages
+        if (pageReviews.length === 0) {
+          consecutiveEmptyPages++;
+          console.log(`    ⚠️ No reviews found (${consecutiveEmptyPages}/${MAX_EMPTY_PAGES} empty pages)`);
+
+          // Stop if we've hit 3 consecutive empty pages
+          if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
+            console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive pages with no reviews, stopping pagination`);
+            break;
+          }
+        } else {
+          // Reset counter if we found reviews
+          consecutiveEmptyPages = 0;
         }
-      } else {
-        // Reset counter if we found reviews
-        consecutiveEmptyPages = 0;
-      }
 
-      // Wait between pages
-      if (currentPage < endPage) {
-        await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
-      }
+      } catch (error) {
+        retryCount++;
+        console.log(`    ⚠️ ${error.message} (attempt ${retryCount}/${CONFIG.MAX_PAGE_RETRIES})`);
 
-    } catch (error) {
-      console.log(`    ⚠️ ${error.message}`);
+        if (retryCount < CONFIG.MAX_PAGE_RETRIES) {
+          console.log(`    🔄 Retrying page ${currentPage}...`);
+          await delay(2000); // Wait 2 seconds before retry
+        }
+      }
+    }
+
+    // If all retries failed, skip to next page
+    if (!pageSuccess) {
+      console.log(`    ⏭️ Skipping page ${currentPage} after ${CONFIG.MAX_PAGE_RETRIES} failed attempts`);
       consecutiveEmptyPages++;
 
       // Stop if we've hit too many consecutive errors/empty pages
       if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
-        console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive errors, stopping pagination`);
+        console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive failures, stopping pagination`);
         break;
       }
       continue;
+    }
+
+    // Wait between pages
+    if (currentPage < endPage) {
+      await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
     }
   }
 
