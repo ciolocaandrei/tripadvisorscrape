@@ -15,8 +15,8 @@ const CONFIG = {
     'https://www.tripadvisor.co.uk/Hotels-g45963-a_travelersChoice.1-Las_Vegas_Nevada-Hotels.html', // First 30 hotels
     'https://www.tripadvisor.co.uk/Hotels-g45963-oa30-a_travelersChoice.1-Las_Vegas_Nevada-Hotels.html' // Next 20 hotels
   ],
-  HOTELS_PER_PAGE: 2,  // First page has 30 hotels
-  MAX_HOTELS: 2,  // Total target: 50 hotels
+  HOTELS_PER_PAGE: 30,  // First page has 30 hotels
+  MAX_HOTELS: 50,  // Total target: 50 hotels
   RESULTS_DIR: './results',
 };
 
@@ -162,29 +162,34 @@ async function extractHotelList() {
 
   let allHotels = [];
   const seenUrls = new Set();
+  const seenNames = new Set();
 
   // Page 1: Get hotels up to MAX_HOTELS
   console.log(`📄 Page 1: Extracting hotels (max ${CONFIG.MAX_HOTELS})...`);
   const page1Hotels = await extractHotelsFromURL(CONFIG.HOTEL_LIST_URLS[0], 1);
 
   let addedFromPage1 = 0;
-  for (let i = 0; i < page1Hotels.length && allHotels.length < CONFIG.MAX_HOTELS; i++) {
+  // Limit to HOTELS_PER_PAGE (30) from page 1
+  for (let i = 0; i < page1Hotels.length && addedFromPage1 < CONFIG.HOTELS_PER_PAGE && allHotels.length < CONFIG.MAX_HOTELS; i++) {
     const hotel = page1Hotels[i];
-    if (!seenUrls.has(hotel.url)) {
+    const nameLower = hotel.name.toLowerCase();
+    // Check both URL and name for uniqueness
+    if (!seenUrls.has(hotel.url) && !seenNames.has(nameLower)) {
       allHotels.push({
         rank: allHotels.length + 1,
         name: hotel.name,
         url: hotel.url
       });
       seenUrls.add(hotel.url);
+      seenNames.add(nameLower);
       addedFromPage1++;
     }
   }
 
-  console.log(`   ✓ Found ${page1Hotels.length} hotels, added ${addedFromPage1} (max: ${CONFIG.MAX_HOTELS})`);
+  console.log(`   ✓ Found ${page1Hotels.length} hotels, added ${addedFromPage1} (max per page: ${CONFIG.HOTELS_PER_PAGE})`);
   console.log(`   📊 Total so far: ${allHotels.length}/${CONFIG.MAX_HOTELS}`);
 
-  // Page 2: Get remaining hotels (20 more to reach 50)
+  // Page 2: Get remaining hotels (up to 30 more, but we only need 20 to reach 50)
   if (allHotels.length < CONFIG.MAX_HOTELS) {
     await delay(500);
 
@@ -193,20 +198,24 @@ async function extractHotelList() {
     const page2Hotels = await extractHotelsFromURL(CONFIG.HOTEL_LIST_URLS[1], 2);
 
     let addedFromPage2 = 0;
-    for (let i = 0; i < page2Hotels.length && allHotels.length < CONFIG.MAX_HOTELS; i++) {
+    // Limit to HOTELS_PER_PAGE (30) from page 2, but also respect MAX_HOTELS total
+    for (let i = 0; i < page2Hotels.length && addedFromPage2 < CONFIG.HOTELS_PER_PAGE && allHotels.length < CONFIG.MAX_HOTELS; i++) {
       const hotel = page2Hotels[i];
-      if (!seenUrls.has(hotel.url)) {
+      const nameLower = hotel.name.toLowerCase();
+      // Check both URL and name for uniqueness
+      if (!seenUrls.has(hotel.url) && !seenNames.has(nameLower)) {
         allHotels.push({
           rank: allHotels.length + 1,
           name: hotel.name,
           url: hotel.url
         });
         seenUrls.add(hotel.url);
+        seenNames.add(nameLower);
         addedFromPage2++;
       }
     }
 
-    console.log(`   ✓ Found ${page2Hotels.length} hotels, added ${addedFromPage2}`);
+    console.log(`   ✓ Found ${page2Hotels.length} hotels, added ${addedFromPage2} (max per page: ${CONFIG.HOTELS_PER_PAGE})`);
     console.log(`   📊 Total: ${allHotels.length}/${CONFIG.MAX_HOTELS}`);
   }
 

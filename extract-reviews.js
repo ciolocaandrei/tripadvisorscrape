@@ -18,8 +18,9 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_HOTELS: 2,  // Limit to 1 hotel for testing
+  MAX_HOTELS: 1,  // Process only ONE incomplete hotel per run
   MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
+  TARGET_REVIEWS: 1000,  // Target number of reviews per hotel (will stop when reached)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
   DELAY_BETWEEN_HOTELS: 100,
   DELAY_BETWEEN_PAGES: 100,
@@ -409,6 +410,12 @@ async function extractReviewsWithFreshBrowser(hotelUrl, startPage, maxPages, pag
 
         pageSuccess = true;
 
+        // Check if we've reached target reviews
+        if (allReviews.length >= CONFIG.TARGET_REVIEWS) {
+          console.log(`    ✅ Reached target of ${CONFIG.TARGET_REVIEWS} reviews (${allReviews.length} collected)`);
+          break;
+        }
+
         // Track consecutive empty pages
         if (pageReviews.length === 0) {
           consecutiveEmptyPages++;
@@ -497,22 +504,10 @@ async function main() {
     process.exit(1);
   }
 
-  let hotels = JSON.parse(fs.readFileSync(CONFIG.HOTELS_FILE, 'utf8'));
-  console.log(`✓ Loaded ${hotels.length} hotels from ${CONFIG.HOTELS_FILE}\n`);
+  const allHotels = JSON.parse(fs.readFileSync(CONFIG.HOTELS_FILE, 'utf8'));
+  console.log(`✓ Loaded ${allHotels.length} hotels from ${CONFIG.HOTELS_FILE}\n`);
 
-  // Limit hotels if MAX_HOTELS is set
-  if (CONFIG.MAX_HOTELS && CONFIG.MAX_HOTELS < hotels.length) {
-    hotels = hotels.slice(0, CONFIG.MAX_HOTELS);
-    console.log(`⚠️  Limiting to first ${CONFIG.MAX_HOTELS} hotel(s) for testing\n`);
-  }
-
-  console.log('📋 Config:');
-  console.log(`   Hotels to process: ${hotels.length}`);
-  console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
-  console.log(`   Keywords: ${CONFIG.CELEBRITY_KEYWORDS.join(', ')}`);
-  console.log(`   Estimated total reviews: ~${hotels.length * CONFIG.MAX_REVIEW_PAGES * 10}`);
-
-  // Load existing results if they exist
+  // Load existing results to check which hotels are completed
   let results = [];
   const progressFile = path.join(CONFIG.RESULTS_DIR, 'reviews-progress.json');
   if (fs.existsSync(progressFile)) {
@@ -524,18 +519,50 @@ async function main() {
     }
   }
 
-  // Check progress directory for resumable hotels
-  const pageProgress = {}; // Now each hotel has its own file
-  if (fs.existsSync(CONFIG.PROGRESS_DIR)) {
-    const progressFiles = fs.readdirSync(CONFIG.PROGRESS_DIR).filter(f => f.endsWith('.json'));
-    if (progressFiles.length > 0) {
-      console.log(`📂 Found progress files for ${progressFiles.length} hotel(s) - will resume where left off\n`);
+  // Find the first incomplete hotel
+  let hotels = [];
+  for (const hotel of allHotels) {
+    // Check if hotel has page progress (partial scrape) - needs to continue
+    const hotelProgress = loadHotelProgress(hotel.url);
+    const hasPartialProgress = hotelProgress.lastCompletedPage > 0 && hotelProgress.lastCompletedPage < CONFIG.MAX_REVIEW_PAGES;
+
+    // Check if hotel is fully completed:
+    // - Has reviews in results AND either reached target reviews OR finished all pages
+    const existingResult = results.find(r => r.url === hotel.url);
+    const reachedTargetReviews = existingResult && existingResult.totalReviews >= CONFIG.TARGET_REVIEWS;
+    const isFullyCompleted = existingResult && existingResult.totalReviews > 0 && !hasPartialProgress;
+
+    // Hotel is done if it reached target reviews OR is fully completed
+    if (reachedTargetReviews || isFullyCompleted) {
+      continue;
+    }
+
+    hotels.push(hotel);
+    if (hotels.length >= CONFIG.MAX_HOTELS) {
+      break;
     }
   }
 
+  if (hotels.length === 0) {
+    console.log('✅ All hotels have been fully processed!\n');
+    process.exit(0);
+  }
+
+  console.log(`📋 Found ${hotels.length} incomplete hotel(s) to process\n`);
+
+  console.log('📋 Config:');
+  console.log(`   Hotels to process: ${hotels.length}`);
+  console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per hotel (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
+  console.log(`   Keywords: ${CONFIG.CELEBRITY_KEYWORDS.join(', ')}`);
+  console.log(`   Total hotels in list: ${allHotels.length}`);
+  console.log(`   Completed hotels: ${allHotels.length - hotels.length}`);
+
+  // Check progress directory for resumable hotels
+  const pageProgress = {}; // Now each hotel has its own file
+
   // Start execution timer
   const startTime = Date.now();
-  console.log(`📊 Processing all ${hotels.length} hotels\n`);
+  console.log(`\n📊 Processing ${hotels.length} incomplete hotel(s)\n`);
   console.log(`🔄 Each hotel gets a fresh browser connection\n`);
   console.log(`⏱️  Started at: ${new Date().toLocaleTimeString()}\n`);
 
@@ -543,19 +570,10 @@ async function main() {
     for (let i = 0; i < hotels.length; i++) {
       const hotel = hotels[i];
 
-      // Check if hotel has page progress (partial scrape) - should continue
+      // Check if hotel has page progress (partial scrape) - show resume info
       const hotelProgress = loadHotelProgress(hotel.url);
-      const hasPartialProgress = hotelProgress.lastCompletedPage > 0 && hotelProgress.lastCompletedPage < CONFIG.MAX_REVIEW_PAGES;
+      const hasPartialProgress = hotelProgress.lastCompletedPage > 0;
 
-      // Skip only if fully completed (in results with reviews AND no partial progress)
-      const existingResult = results.find(r => r.url === hotel.url);
-      if (existingResult && existingResult.totalReviews > 0 && !hasPartialProgress) {
-        console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
-        console.log(`  ⏭️  Already fully processed (${existingResult.totalReviews} reviews)`);
-        continue;
-      }
-
-      // Show resume info if we have partial progress
       if (hasPartialProgress) {
         console.log(`\n[${i + 1}/${hotels.length}] ${hotel.name}`);
         console.log(`  📂 Resuming from page ${hotelProgress.lastCompletedPage + 1} (${hotelProgress.reviews?.length || 0} reviews so far)`);
@@ -646,26 +664,37 @@ async function main() {
     const seconds = totalSeconds % 60;
 
     console.log('\n' + '═'.repeat(60));
-    console.log('✅ REVIEW EXTRACTION COMPLETED!');
+    console.log('✅ HOTEL REVIEW EXTRACTION COMPLETED!');
     console.log('═'.repeat(60));
-    console.log(`📊 Total hotels processed: ${summary.totalHotelsScraped}`);
+    console.log(`📊 Hotels processed this run: ${hotels.length}`);
+    console.log(`📊 Total hotels completed: ${summary.totalHotelsScraped}/${allHotels.length}`);
     console.log(`📝 Total reviews: ${summary.totalReviewsScraped}`);
     console.log(`⭐ Celebrity mentions: ${summary.totalCelebrityMentions}`);
     console.log(`🏨 Hotels with mentions: ${summary.hotelsWithMentions}`);
-    console.log('\n🏆 Top 5 hotels by celebrity mentions:');
-    summary.topHotelsByMentions.slice(0, 5).forEach((h, i) => {
-      console.log(`   ${i + 1}. ${h.name} - ${h.mentions} mentions`);
-    });
+    if (summary.topHotelsByMentions.length > 0) {
+      console.log('\n🏆 Top 5 hotels by celebrity mentions:');
+      summary.topHotelsByMentions.slice(0, 5).forEach((h, i) => {
+        console.log(`   ${i + 1}. ${h.name} - ${h.mentions} mentions`);
+      });
+    }
     console.log(`\n⏱️  Execution Time:`);
     console.log(`   Total: ${hours}h ${minutes}m ${seconds}s`);
     console.log(`   Started: ${new Date(startTime).toLocaleTimeString()}`);
     console.log(`   Finished: ${new Date(endTime).toLocaleTimeString()}`);
-    console.log(`   Average: ${(totalSeconds / summary.totalHotelsScraped).toFixed(1)}s per hotel`);
+    if (summary.totalHotelsScraped > 0) {
+      console.log(`   Average: ${(totalSeconds / hotels.length).toFixed(1)}s per hotel (this run)`);
+    }
     console.log(`\n📁 Results saved to:`);
     console.log(`   Combined: ./${CONFIG.RESULTS_DIR}/reviews-final.json`);
-    console.log(`   Individual: ./${CONFIG.REVIEWS_DIR}/ (${summary.totalHotelsScraped} hotel files)`);
+    console.log(`   Individual: ./${CONFIG.REVIEWS_DIR}/`);
     console.log(`   Summary: ./${CONFIG.RESULTS_DIR}/reviews-summary.json`);
-    console.log(`\n✅ All ${hotels.length} hotels have been processed!\n`);
+
+    const remainingHotels = allHotels.length - summary.totalHotelsScraped;
+    if (remainingHotels > 0) {
+      console.log(`\n⏳ ${remainingHotels} hotel(s) remaining. Run again to continue.\n`);
+    } else {
+      console.log(`\n✅ All ${allHotels.length} hotels have been processed!\n`);
+    }
 
   } catch (error) {
     console.error('\n❌ Error:', error.message);
