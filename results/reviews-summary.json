@@ -1,0 +1,42 @@
+{
+  "totalHotelsScraped": 5,
+  "totalReviewsScraped": 4520,
+  "totalCelebrityMentions": 2,
+  "hotelsWithMentions": 2,
+  "topHotelsByMentions": [
+    {
+      "rank": 1,
+      "name": "Downtown Grand Hotel",
+      "mentions": 1,
+      "breakdown": {
+        "celebrities": 1
+      }
+    },
+    {
+      "rank": 3,
+      "name": "Fontainebleau Las Vegas",
+      "mentions": 1,
+      "breakdown": {
+        "celebrities": 1
+      }
+    },
+    {
+      "rank": 1,
+      "name": "Westgate Las Vegas Resort & Casino",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 4,
+      "name": "Trump International Hotel Las Vegas",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 5,
+      "name": "Palms Casino Resort",
+      "mentions": 0,
+      "breakdown": {}
+    }
+  ]
+}
