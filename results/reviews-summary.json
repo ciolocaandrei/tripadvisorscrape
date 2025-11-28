@@ -1,6 +1,6 @@
 {
-  "totalHotelsScraped": 7,
-  "totalReviewsScraped": 6390,
+  "totalHotelsScraped": 8,
+  "totalReviewsScraped": 7340,
   "totalCelebrityMentions": 2,
   "hotelsWithMentions": 2,
   "topHotelsByMentions": [
@@ -47,6 +47,12 @@
     {
       "rank": 7,
       "name": "The Grandview At Las Vegas",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 8,
+      "name": "Silverton Casino Lodge",
       "mentions": 0,
       "breakdown": {}
     }
