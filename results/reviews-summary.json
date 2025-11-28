@@ -1,6 +1,6 @@
 {
-  "totalHotelsScraped": 5,
-  "totalReviewsScraped": 4520,
+  "totalHotelsScraped": 7,
+  "totalReviewsScraped": 6390,
   "totalCelebrityMentions": 2,
   "hotelsWithMentions": 2,
   "topHotelsByMentions": [
@@ -35,6 +35,18 @@
     {
       "rank": 5,
       "name": "Palms Casino Resort",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 6,
+      "name": "Tuscany Suites & Casino",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 7,
+      "name": "The Grandview At Las Vegas",
       "mentions": 0,
       "breakdown": {}
     }
