@@ -1,6 +1,6 @@
 {
-  "totalHotelsScraped": 9,
-  "totalReviewsScraped": 8180,
+  "totalHotelsScraped": 10,
+  "totalReviewsScraped": 9090,
   "totalCelebrityMentions": 2,
   "hotelsWithMentions": 2,
   "topHotelsByMentions": [
@@ -59,6 +59,12 @@
     {
       "rank": 9,
       "name": "South Point Hotel Casino and Spa",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 10,
+      "name": "The Cliffs at Peace Canyon",
       "mentions": 0,
       "breakdown": {}
     }
