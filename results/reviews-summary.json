@@ -1,6 +1,6 @@
 {
-  "totalHotelsScraped": 8,
-  "totalReviewsScraped": 7340,
+  "totalHotelsScraped": 9,
+  "totalReviewsScraped": 8180,
   "totalCelebrityMentions": 2,
   "hotelsWithMentions": 2,
   "topHotelsByMentions": [
@@ -53,6 +53,12 @@
     {
       "rank": 8,
       "name": "Silverton Casino Lodge",
+      "mentions": 0,
+      "breakdown": {}
+    },
+    {
+      "rank": 9,
+      "name": "South Point Hotel Casino and Spa",
       "mentions": 0,
       "breakdown": {}
     }
