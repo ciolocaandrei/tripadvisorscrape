@@ -18,7 +18,7 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_HOTELS: 1,  // Process only ONE incomplete hotel per run
+  MAX_HOTELS: 5,  // Process only ONE incomplete hotel per run
   MAX_REVIEW_PAGES: 100,  // Max pages of reviews per hotel (~1000 reviews per hotel)
   TARGET_REVIEWS: 1000,  // Target number of reviews per hotel (will stop when reached)
   CELEBRITY_KEYWORDS: ['celeb spotting', 'celeb sighting', 'celebrities'],
