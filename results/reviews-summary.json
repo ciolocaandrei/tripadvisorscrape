@@ -1,9 +1,17 @@
 {
-  "totalHotelsScraped": 16,
-  "totalReviewsScraped": 13860,
-  "totalCelebrityMentions": 2,
-  "hotelsWithMentions": 2,
+  "totalHotelsScraped": 17,
+  "totalReviewsScraped": 14720,
+  "totalCelebrityMentions": 4,
+  "hotelsWithMentions": 3,
   "topHotelsByMentions": [
+    {
+      "rank": 17,
+      "name": "Four Seasons Hotel Las Vegas",
+      "mentions": 2,
+      "breakdown": {
+        "celebrities": 2
+      }
+    },
     {
       "rank": 1,
       "name": "Downtown Grand Hotel",
@@ -59,12 +67,6 @@
     {
       "rank": 9,
       "name": "South Point Hotel Casino and Spa",
-      "mentions": 0,
-      "breakdown": {}
-    },
-    {
-      "rank": 10,
-      "name": "The Cliffs at Peace Canyon",
       "mentions": 0,
       "breakdown": {}
     }
