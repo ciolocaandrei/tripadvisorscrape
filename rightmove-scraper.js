@@ -103,6 +103,50 @@ async function fetchApiData(url) {
   }
 }
 
+// Parse displaySize to extract min/max values in sqm
+function parseDisplaySize(displaySize) {
+  if (!displaySize) {
+    return { displaySize: '', sizeMinSqft: '', sizeMaxSqft: '', sizeMinSqm: '', sizeMaxSqm: '' };
+  }
+
+  // Remove commas from numbers for easier parsing
+  const cleanedSize = displaySize.replace(/,/g, '');
+
+  // Check if it's a range (contains – or -)
+  const rangeMatch = cleanedSize.match(/([\d.]+)\s*[–-]\s*([\d.]+)\s*sq\.?\s*ft\.?/i);
+  if (rangeMatch) {
+    const minSqft = parseFloat(rangeMatch[1]);
+    const maxSqft = parseFloat(rangeMatch[2]);
+    // Convert to sqm (1 sq ft = 0.092903 sq m)
+    const minSqm = Math.round(minSqft * 0.092903);
+    const maxSqm = Math.round(maxSqft * 0.092903);
+    return {
+      displaySize: displaySize,
+      sizeMinSqft: minSqft,
+      sizeMaxSqft: maxSqft,
+      sizeMinSqm: minSqm,
+      sizeMaxSqm: maxSqm
+    };
+  }
+
+  // Single value
+  const singleMatch = cleanedSize.match(/([\d.]+)\s*sq\.?\s*ft\.?/i);
+  if (singleMatch) {
+    const sqft = parseFloat(singleMatch[1]);
+    const sqm = Math.round(sqft * 0.092903);
+    return {
+      displaySize: displaySize,
+      sizeMinSqft: sqft,
+      sizeMaxSqft: sqft,
+      sizeMinSqm: sqm,
+      sizeMaxSqm: sqm
+    };
+  }
+
+  // Could not parse, return raw value only
+  return { displaySize: displaySize, sizeMinSqft: '', sizeMaxSqft: '', sizeMinSqm: '', sizeMaxSqm: '' };
+}
+
 // Extract property data from API response
 function extractPropertyData(apiResponse, city) {
   const properties = [];
@@ -112,6 +156,8 @@ function extractPropertyData(apiResponse, city) {
   }
 
   for (const prop of apiResponse.properties) {
+    const sizeData = parseDisplaySize(prop.displaySize);
+
     properties.push({
       id: prop.id,
       city: city,
@@ -121,6 +167,11 @@ function extractPropertyData(apiResponse, city) {
       priceQualifier: prop.price?.displayPrices?.[0]?.displayPriceQualifier || '',
       bedrooms: prop.bedrooms || '',
       bathrooms: prop.bathrooms || '',
+      displaySize: sizeData.displaySize,
+      sizeMinSqft: sizeData.sizeMinSqft,
+      sizeMaxSqft: sizeData.sizeMaxSqft,
+      sizeMinSqm: sizeData.sizeMinSqm,
+      sizeMaxSqm: sizeData.sizeMaxSqm,
       summary: prop.summary || '',
       propertyUrl: prop.propertyUrl ? `https://www.rightmove.co.uk${prop.propertyUrl}` : '',
       firstVisibleDate: prop.firstVisibleDate || '',
@@ -143,7 +194,8 @@ function propertiesToCSV(properties) {
 
   const headers = [
     'id', 'city', 'propertyType', 'displayAddress', 'price', 'priceQualifier',
-    'bedrooms', 'bathrooms', 'summary', 'propertyUrl', 'firstVisibleDate',
+    'bedrooms', 'bathrooms', 'displaySize', 'sizeMinSqft', 'sizeMaxSqft',
+    'sizeMinSqm', 'sizeMaxSqm', 'summary', 'propertyUrl', 'firstVisibleDate',
     'addedOrReduced', 'listingUpdate', 'formattedBranchName', 'branchDisplayName',
     'latitude', 'longitude', 'propertyImages'
   ];
