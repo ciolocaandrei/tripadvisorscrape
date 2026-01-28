@@ -19,7 +19,7 @@ import path from 'path';
 const AUTH = 'brd-customer-hl_94d90749-zone-scraping_browser:7923gx0w4vyy';
 
 const CONFIG = {
-  MAX_BEACHES: 1,  // Process only ONE incomplete beach per run
+  MAX_BEACHES: 25,  // Process all beaches in one run
   MAX_REVIEW_PAGES: 100,  // Max pages of reviews per beach (~1000 reviews)
   TARGET_REVIEWS: 1000,  // Target number of reviews per beach
   BEACH_KEYWORDS: [
@@ -436,8 +436,9 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
 
   let consecutiveEmptyPages = 0;
   const MAX_EMPTY_PAGES = 3;
+  let shouldStopPagination = false;  // Flag to break out of both loops
 
-  for (let currentPage = actualStartPage; currentPage <= endPage; currentPage++) {
+  for (let currentPage = actualStartPage; currentPage <= endPage && !shouldStopPagination; currentPage++) {
     console.log(`    Page ${currentPage}...`);
 
     let pageReviews = [];
@@ -475,6 +476,7 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
 
         if (allReviews.length >= CONFIG.TARGET_REVIEWS) {
           console.log(`    ✅ Reached target of ${CONFIG.TARGET_REVIEWS} reviews (${allReviews.length} collected)`);
+          shouldStopPagination = true;
           break;
         }
 
@@ -484,6 +486,7 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
 
           if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
             console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive pages with no reviews, stopping pagination`);
+            shouldStopPagination = true;
             break;
           }
         } else {
@@ -501,18 +504,23 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
       }
     }
 
+    if (shouldStopPagination) {
+      break;
+    }
+
     if (!pageSuccess) {
       console.log(`    ⏭️ Skipping page ${currentPage} after ${CONFIG.MAX_PAGE_RETRIES} failed attempts`);
       consecutiveEmptyPages++;
 
       if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
         console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive failures, stopping pagination`);
+        shouldStopPagination = true;
         break;
       }
       continue;
     }
 
-    if (currentPage < endPage) {
+    if (currentPage < endPage && !shouldStopPagination) {
       await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
     }
   }
