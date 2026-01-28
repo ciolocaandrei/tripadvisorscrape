@@ -9,7 +9,11 @@
     "reviews": "node extract-reviews.js",
     "export": "node export-to-csv.js",
     "chatgpt": "node chatgpt-search.js",
-    "rightmove": "node rightmove-scraper.js"
+    "rightmove": "node rightmove-scraper.js",
+    "beaches": "node beach-scraper.js",
+    "beach-reviews": "node beach-reviews-extractor.js",
+    "beach-export": "node beach-export-to-csv.js",
+    "beaches-all": "node beach-scraper.js && node beach-reviews-extractor.js && node beach-export-to-csv.js"
   },
   "keywords": [
     "tripadvisor",
