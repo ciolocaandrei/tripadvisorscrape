@@ -49,7 +49,7 @@ const CONFIG = {
   DELAY_BETWEEN_BEACHES: 100,
   DELAY_BETWEEN_PAGES: 100,
   PAGE_TIMEOUT: 2 * 60 * 1000,  // 2 minutes timeout per page
-  MAX_PAGE_RETRIES: 3,
+  MAX_PAGE_RETRIES: 5,  // More retries to handle timeouts
   RESULTS_DIR: './results/beaches',
   REVIEWS_DIR: './results/beaches/reviews',
   PROGRESS_DIR: './results/beaches/progress',
@@ -279,7 +279,7 @@ async function extractSinglePageWithFreshBrowser(beachUrl, pageNum) {
   try {
     browser = await puppeteer.connect({
       browserWSEndpoint,
-      timeout: 10000
+      timeout: 15000
     });
 
     const page = await browser.newPage();
@@ -289,13 +289,13 @@ async function extractSinglePageWithFreshBrowser(beachUrl, pageNum) {
 
     await page.goto(pageUrl, {
       timeout: 30000,
-      waitUntil: 'domcontentloaded'
+      waitUntil: 'domcontentloaded'  // Don't wait for all network requests
     });
 
     // Check for CAPTCHA
     try {
       const { status } = await client.send('Captcha.waitForSolve', {
-        detectTimeout: 2000,
+        detectTimeout: 3000,
       });
       if (status !== 'none') {
         console.log(`    ✓ CAPTCHA ${status}`);
@@ -304,98 +304,164 @@ async function extractSinglePageWithFreshBrowser(beachUrl, pageNum) {
       // No CAPTCHA
     }
 
-    await randomDelay(500, 1000);
+    // Wait for page to fully render
+    await randomDelay(3000, 4000);
 
-    // Wait for reviews to load
-    await page.waitForSelector('[class*="review"], div', { timeout: 5000 }).catch(() => {});
-    await randomDelay(300, 500);
+    // Debug: Log what we find on the page
+    const debugInfo = await page.evaluate(() => {
+      return {
+        url: window.location.href,
+        title: document.title,
+        hasReviewCards: document.querySelectorAll('[data-automation="reviewCard"]').length,
+        hasProfileLinks: document.querySelectorAll('a[href*="/Profile/"]').length,
+        hasSvgs: document.querySelectorAll('svg').length,
+        hasH3: document.querySelectorAll('h3').length,
+        bodyLength: document.body?.innerHTML?.length || 0,
+        sampleText: document.body?.textContent?.substring(0, 500) || ''
+      };
+    });
+    console.log(`    🔍 Debug: URL=${debugInfo.url}`);
+    console.log(`    🔍 Debug: reviewCards=${debugInfo.hasReviewCards}, profiles=${debugInfo.hasProfileLinks}, svgs=${debugInfo.hasSvgs}, h3s=${debugInfo.hasH3}`);
+    console.log(`    🔍 Debug: bodyLength=${debugInfo.bodyLength}`);
+
+    // Try scrolling to trigger lazy loading
+    await page.evaluate(() => window.scrollTo(0, 500));
+    await randomDelay(1000, 1500);
+    await page.evaluate(() => window.scrollTo(0, 1000));
+    await randomDelay(1000, 1500);
 
     // Extract reviews from current page
     const pageReviews = await page.evaluate(() => {
-      // TripAdvisor attraction reviews use similar structure to hotels
-      // Try multiple selectors
-      let reviewCards = document.querySelectorAll('div[data-test-target="HR_CC_CARD"]');
-
-      // Fallback selectors for attractions
-      if (reviewCards.length === 0) {
-        reviewCards = document.querySelectorAll('[data-automation="reviewCard"], [class*="reviewCard"]');
-      }
-
-      if (reviewCards.length === 0) {
-        // Try finding reviews by common patterns
-        reviewCards = document.querySelectorAll('[class*="review_"][class*="item"], [class*="Review__"]');
-      }
-
       const reviews = [];
+      const seenTexts = new Set();
+      const debug = [];
+
+      // Method 1: Find review cards using data-automation attribute
+      let reviewCards = Array.from(document.querySelectorAll('[data-automation="reviewCard"]'));
+      debug.push(`Method1: ${reviewCards.length} cards`);
+
+      // Method 2: Try _c class which wraps review cards
+      if (reviewCards.length === 0) {
+        reviewCards = Array.from(document.querySelectorAll('div._c[data-automation="reviewCard"], div[class*="_c"]')).filter(el => {
+          return el.querySelector('a[href*="/Profile/"]') && el.querySelector('svg');
+        });
+        debug.push(`Method2: ${reviewCards.length} cards`);
+      }
+
+      // Method 3: Find by profile links and walk up
+      if (reviewCards.length === 0) {
+        const profileLinks = document.querySelectorAll('a[href*="/Profile/"]');
+        debug.push(`Found ${profileLinks.length} profile links`);
+        const cardSet = new Set();
+        profileLinks.forEach(link => {
+          let parent = link.parentElement;
+          for (let i = 0; i < 10 && parent; i++) {
+            if (parent.querySelector('h3') && parent.querySelector('svg')) {
+              cardSet.add(parent);
+              break;
+            }
+            parent = parent.parentElement;
+          }
+        });
+        reviewCards = Array.from(cardSet);
+        debug.push(`Method3: ${reviewCards.length} cards`);
+      }
+
+      console.log('DEBUG:', debug.join(', '));
 
       reviewCards.forEach(card => {
+        // Extract title - from h3 or first short link text
         let title = '';
-        // Try multiple title selectors
-        const titleSelectors = [
-          '[data-test-target="review-title"]',
-          '[class*="title"]',
-          'a[href*="ShowUserReviews"] span',
-          'h5',
-          '[class*="reviewTitle"]'
-        ];
-        for (const sel of titleSelectors) {
-          const el = card.querySelector(sel);
-          if (el) {
-            title = el.textContent?.trim() || '';
-            if (title) break;
-          }
+        const h3 = card.querySelector('h3');
+        if (h3) {
+          title = h3.textContent?.trim() || '';
+        }
+        if (!title) {
+          const titleLink = card.querySelector('a[href*="ShowUserReviews"]');
+          if (titleLink) title = titleLink.textContent?.trim() || '';
         }
 
+        // Extract text - find the longest meaningful text block
         let text = '';
-        // Try multiple text selectors
-        const textSelectors = [
-          '[data-test-target="review-text"]',
-          '[class*="reviewText"]',
-          '[class*="partial_entry"]',
-          'q',
-          'p[class*="text"]'
-        ];
-        for (const sel of textSelectors) {
-          const el = card.querySelector(sel);
-          if (el) {
-            text = el.textContent?.trim() || '';
-            if (text && text.length > 50) break;
-          }
-        }
+        const allSpans = card.querySelectorAll('span');
+        let longestText = '';
 
-        // Fallback: look for substantial text
-        if (!text || text.length < 50) {
-          const allSpans = card.querySelectorAll('span, p, div');
-          for (const span of allSpans) {
-            const spanText = span.textContent?.trim() || '';
-            if (spanText.length > 100 && spanText.length < 5000 &&
-                !spanText.includes('Helpful') && !spanText.includes('Share')) {
-              text = spanText;
-              break;
+        allSpans.forEach(span => {
+          const t = span.textContent?.trim() || '';
+          // Must be longer than current, reasonable length, not UI text
+          if (t.length > longestText.length &&
+              t.length > 30 &&
+              t.length < 5000 &&
+              t !== title &&
+              !t.includes('contribution') &&
+              !t.includes('Helpful') &&
+              !t.includes('Read more') &&
+              !t.includes('Tripadvisor LLC') &&
+              !t.match(/^\d+$/) &&
+              !t.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/)) {
+            longestText = t;
+          }
+        });
+        text = longestText;
+
+        // Extract rating from SVG
+        let rating = 0;
+        const svg = card.querySelector('svg');
+        if (svg) {
+          // Check title element inside SVG
+          const svgTitle = svg.querySelector('title');
+          if (svgTitle) {
+            const match = svgTitle.textContent?.match(/(\d+(?:\.\d+)?)\s*of\s*5/i);
+            if (match) rating = parseFloat(match[1]);
+          }
+          // Check aria-labelledby
+          if (!rating) {
+            const labelId = svg.getAttribute('aria-labelledby');
+            if (labelId) {
+              const label = document.getElementById(labelId);
+              if (label) {
+                const match = label.textContent?.match(/(\d+(?:\.\d+)?)\s*of\s*5/i);
+                if (match) rating = parseFloat(match[1]);
+              }
             }
           }
         }
 
-        let rating = 0;
-        const ratingEl = card.querySelector('[class*="bubble_rating"], [class*="rating"]');
-        if (ratingEl) {
-          const match = ratingEl.className.match(/bubble_(\d+)/);
-          if (match) rating = parseInt(match[1]) / 10;
-        }
-
+        // Extract date - look for date patterns in text
         let date = '';
-        const dateEl = card.querySelector('[data-test-target="review-date"], time, [class*="date"]');
-        if (dateEl) date = dateEl.textContent?.trim() || '';
-
-        let reviewer = '';
-        const nameEl = card.querySelector('a[href*="/Profile/"]');
-        if (nameEl) {
-          const nameDiv = nameEl.querySelector('span, div');
-          if (nameDiv) reviewer = nameDiv.textContent?.trim() || '';
+        const cardText = card.textContent || '';
+        const dateMatch = cardText.match(/Written\s+(\d{1,2}\s+\w+\s+\d{4})/i);
+        if (dateMatch) {
+          date = dateMatch[1];
+        } else {
+          const altDateMatch = cardText.match(/((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4})/i);
+          if (altDateMatch) date = altDateMatch[1];
         }
 
+        // Extract reviewer
+        let reviewer = '';
+        const profileLink = card.querySelector('a[href*="/Profile/"]');
+        if (profileLink) {
+          // Get direct text or first span text
+          const spans = profileLink.querySelectorAll('span');
+          if (spans.length > 0) {
+            reviewer = spans[0].textContent?.trim() || '';
+          }
+          if (!reviewer) {
+            reviewer = profileLink.textContent?.trim() || '';
+          }
+          // Clean up
+          reviewer = reviewer.split(/\d+ contribution/)[0].trim();
+          reviewer = reviewer.split('\n')[0].trim();
+        }
+
+        // Add review if we have text
         if (text && text.length > 20) {
-          reviews.push({ title, text, rating, date, reviewer });
+          const textKey = text.substring(0, 50).toLowerCase();
+          if (!seenTexts.has(textKey)) {
+            seenTexts.add(textKey);
+            reviews.push({ title, text, rating, date, reviewer });
+          }
         }
       });
 
@@ -411,8 +477,10 @@ async function extractSinglePageWithFreshBrowser(beachUrl, pageNum) {
       try {
         await browser.close();
       } catch (e) {
-        // Ignore
+        // Ignore close errors
       }
+      // Wait a bit after closing to ensure connection is fully released
+      await delay(1000);
     }
     return [];
   }
@@ -498,8 +566,10 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
         console.log(`    ⚠️ ${error.message} (attempt ${retryCount}/${CONFIG.MAX_PAGE_RETRIES})`);
 
         if (retryCount < CONFIG.MAX_PAGE_RETRIES) {
-          console.log(`    🔄 Retrying page ${currentPage}...`);
-          await delay(2000);
+          // Wait longer on timeout errors to let things settle
+          const waitTime = error.message.includes('timeout') ? 5000 : 2000;
+          console.log(`    🔄 Retrying page ${currentPage} in ${waitTime/1000}s with fresh browser...`);
+          await delay(waitTime);
         }
       }
     }
