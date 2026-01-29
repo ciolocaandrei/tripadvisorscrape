@@ -8,37 +8,37 @@
   {
     "rank": 2,
     "name": "Banana Beach",
-    "location": "Phuket, Thailand",
+    "location": "Ko He, Phuket, Thailand",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g1224343-d8550982-Reviews-Banana_Beach-Ko_He_Phuket.html"
   },
   {
     "rank": 3,
     "name": "Eagle Beach",
-    "location": "Palm - Eagle Beach, Aruba",
+    "location": "Aruba",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g147249-d150447-Reviews-Eagle_Beach-Palm_Eagle_Beach_Aruba.html"
   },
   {
     "rank": 4,
     "name": "Siesta Beach",
-    "location": "Siesta Key, Florida",
+    "location": "Siesta Key, Florida, USA",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g34636-d123075-Reviews-Siesta_Beach-Siesta_Key_Florida.html"
   },
   {
     "rank": 5,
-    "name": "Praia da Falésia",
-    "location": "Olhos de Agua, Portugal",
+    "name": "Praia da Falesia",
+    "location": "Albufeira, Portugal",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g1190872-d669516-Reviews-Praia_da_Falesia-Olhos_de_Agua_Albufeira_Faro_District_Algarve.html"
   },
   {
     "rank": 6,
-    "name": "Playa Varadero",
+    "name": "Varadero Beach",
     "location": "Varadero, Cuba",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g147275-d669563-Reviews-Playa_Varadero-Varadero_Matanzas_Province_Cuba.html"
   },
   {
     "rank": 7,
     "name": "Bavaro Beach",
-    "location": "Bavaro, Dominican Republic",
+    "location": "Punta Cana, Dominican Republic",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g3176298-d215733-Reviews-Bavaro_Beach-Bavaro_Punta_Cana_La_Altagracia_Province_Dominican_Republic.html"
   },
   {
@@ -50,7 +50,7 @@
   {
     "rank": 9,
     "name": "Kelingking Beach",
-    "location": "Nusa Penida, Indonesia",
+    "location": "Nusa Penida, Bali, Indonesia",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g2538506-d12396108-Reviews-Kelingking_Beach-Nusa_Penida_Bali.html"
   },
   {
@@ -61,9 +61,9 @@
   },
   {
     "rank": 11,
-    "name": "Spiaggia dei Conigli",
-    "location": "Lampedusa, Italy",
-    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g262047-d568915-Reviews-Spiaggia_dei_Conigli-Lampedusa_Islands_of_Sicily_Sicily.html"
+    "name": "Tropea Beach",
+    "location": "Calabria, Italy",
+    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g194939-d1754906-Reviews-Tropea_Beach-Tropea_Province_of_Vibo_Valentia_Calabria.html"
   },
   {
     "rank": 12,
@@ -73,14 +73,14 @@
   },
   {
     "rank": 13,
-    "name": "Ipanema Beach",
-    "location": "Rio de Janeiro, Brazil",
-    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g303506-d312071-Reviews-Ipanema_Beach-Rio_de_Janeiro_State_of_Rio_de_Janeiro.html"
+    "name": "Porto de Galinhas Beach",
+    "location": "Pernambuco, Brazil",
+    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g303461-d2327861-Reviews-Porto_de_Galinhas-Porto_de_Galinhas_Ipojuca_State_of_Pernambuco.html"
   },
   {
     "rank": 14,
     "name": "Poipu Beach Park",
-    "location": "Poipu, Koloa, Kauai, Hawaii",
+    "location": "Kauai, Hawaii, USA",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g60625-d155138-Reviews-Poipu_Beach_Park-Poipu_Koloa_Kauai_Hawaii.html"
   },
   {
@@ -115,38 +115,38 @@
   },
   {
     "rank": 20,
-    "name": "Tropea Beach",
-    "location": "Tropea, Italy",
-    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g194939-d1754906-Reviews-Tropea_Beach-Tropea_Province_of_Vibo_Valentia_Calabria.html"
-  },
-  {
-    "rank": 21,
-    "name": "Balandra Beach",
-    "location": "La Paz, Mexico",
-    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g150771-d1067272-Reviews-Balandra_Beach-La_Paz_Baja_California.html"
-  },
-  {
-    "rank": 22,
     "name": "Ka'anapali Beach",
-    "location": "Lahaina, Maui, Hawaii",
+    "location": "Maui, Hawaii, USA",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g60634-d260002-Reviews-Ka_anapali_Beach-Lahaina_Maui_Hawaii.html"
   },
   {
-    "rank": 23,
+    "rank": 21,
     "name": "Reynisfjara Beach",
     "location": "Vik, Iceland",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g189978-d8004333-Reviews-Reynisfjara_Beach-Vik_South_Region.html"
   },
   {
-    "rank": 24,
+    "rank": 22,
     "name": "Bondi Beach",
     "location": "Sydney, Australia",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g255060-d257354-Reviews-Bondi_Beach-Sydney_New_South_Wales.html"
   },
   {
-    "rank": 25,
+    "rank": 23,
     "name": "Muro Alto Beach",
     "location": "Porto de Galinhas, Brazil",
     "url": "https://www.tripadvisor.co.uk/Attraction_Review-g303461-d2327879-Reviews-Muro_Alto_Beach-Porto_de_Galinhas_Ipojuca_State_of_Pernambuco.html"
+  },
+  {
+    "rank": 24,
+    "name": "Grace Bay Beach",
+    "location": "Providenciales, Turks and Caicos",
+    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g10006284-d148331-Reviews-Grace_Bay_Beach-Grace_Bay_Providenciales_Turks_and_Caicos.html"
+  },
+  {
+    "rank": 25,
+    "name": "Whitehaven Beach",
+    "location": "Whitsunday Islands, Australia",
+    "url": "https://www.tripadvisor.co.uk/Attraction_Review-g255069-d256667-Reviews-Whitehaven_Beach-Whitsunday_Island_Whitsunday_Islands_Queensland.html"
   }
 ]

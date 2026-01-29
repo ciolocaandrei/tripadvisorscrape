@@ -651,9 +651,21 @@ async function main() {
     }
   }
 
-  // Find incomplete beaches
+  // Find incomplete beaches - skip if review file already exists
   let beaches = [];
   for (const beach of allBeaches) {
+    // Check if individual review file already exists (beach-{rank}-{name}.json)
+    const sanitizedName = sanitizeFilename(beach.name);
+    const reviewFile = path.join(CONFIG.REVIEWS_DIR, `beach-${beach.rank}-${sanitizedName}.json`);
+    if (fs.existsSync(reviewFile)) {
+      const existingData = JSON.parse(fs.readFileSync(reviewFile, 'utf8'));
+      if (existingData.totalReviews > 0) {
+        console.log(`  ✓ Skipping #${beach.rank} ${beach.name} (${existingData.totalReviews} reviews already saved)`);
+        continue;
+      }
+    }
+
+    // Also check progress file for partial scrapes
     const beachProgress = loadBeachProgress(beach.url);
     const hasPartialProgress = beachProgress.lastCompletedPage > 0 && beachProgress.lastCompletedPage < CONFIG.MAX_REVIEW_PAGES;
 
@@ -662,6 +674,7 @@ async function main() {
     const isFullyCompleted = existingResult && existingResult.totalReviews > 0 && !hasPartialProgress;
 
     if (reachedTargetReviews || isFullyCompleted) {
+      console.log(`  ✓ Skipping #${beach.rank} ${beach.name} (already completed)`);
       continue;
     }
 
@@ -671,26 +684,46 @@ async function main() {
     }
   }
 
-  if (beaches.length === 0) {
-    console.log('✅ All beaches have been fully processed!\n');
-    process.exit(0);
+  // Load all existing review files into results for final/progress/summary rebuild
+  console.log('\n📂 Loading existing review files...');
+  if (fs.existsSync(CONFIG.REVIEWS_DIR)) {
+    const reviewFiles = fs.readdirSync(CONFIG.REVIEWS_DIR).filter(f => f.endsWith('.json'));
+    for (const file of reviewFiles) {
+      const filepath = path.join(CONFIG.REVIEWS_DIR, file);
+      try {
+        const data = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+        if (data.totalReviews > 0) {
+          const existingIndex = results.findIndex(r => r.url === data.url);
+          if (existingIndex >= 0) {
+            results[existingIndex] = data;
+          } else {
+            results.push(data);
+          }
+        }
+      } catch (e) {
+        console.log(`  ⚠️ Could not load ${file}: ${e.message}`);
+      }
+    }
+    console.log(`  ✓ Loaded ${results.length} existing beach results\n`);
   }
 
-  console.log(`📋 Found ${beaches.length} incomplete beach(es) to process\n`);
+  if (beaches.length === 0) {
+    console.log('✅ All beaches already scraped, rebuilding final/progress/summary...\n');
+  } else {
+    console.log(`📋 Found ${beaches.length} incomplete beach(es) to process\n`);
 
-  console.log('📋 Config:');
-  console.log(`   Beaches to process: ${beaches.length}`);
-  console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per beach (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
-  console.log(`   Keywords: ${CONFIG.BEACH_KEYWORDS.slice(0, 10).join(', ')}...`);
-  console.log(`   Total beaches in list: ${allBeaches.length}`);
-  console.log(`   Completed beaches: ${allBeaches.length - beaches.length}`);
+    console.log('📋 Config:');
+    console.log(`   Beaches to process: ${beaches.length}`);
+    console.log(`   Max Review Pages: ${CONFIG.MAX_REVIEW_PAGES} per beach (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
+    console.log(`   Keywords: ${CONFIG.BEACH_KEYWORDS.slice(0, 10).join(', ')}...`);
+    console.log(`   Total beaches in list: ${allBeaches.length}`);
+    console.log(`   Completed beaches: ${allBeaches.length - beaches.length}`);
 
-  const startTime = Date.now();
-  console.log(`\n📊 Processing ${beaches.length} incomplete beach(es)\n`);
-  console.log(`🔄 Each beach gets a fresh browser connection\n`);
-  console.log(`⏱️  Started at: ${new Date().toLocaleTimeString()}\n`);
+    const startTime = Date.now();
+    console.log(`\n📊 Processing ${beaches.length} incomplete beach(es)\n`);
+    console.log(`🔄 Each beach gets a fresh browser connection\n`);
+    console.log(`⏱️  Started at: ${new Date().toLocaleTimeString()}\n`);
 
-  try {
     for (let i = 0; i < beaches.length; i++) {
       const beach = beaches[i];
 
@@ -781,7 +814,10 @@ async function main() {
         await randomDelay(CONFIG.DELAY_BETWEEN_BEACHES, CONFIG.DELAY_BETWEEN_BEACHES + 2000);
       }
     }
+  }
 
+  try {
+    // Always rebuild final/progress/summary from all results
     const summary = {
       totalBeachesScraped: results.length,
       totalReviewsScraped: results.reduce((sum, b) => sum + b.totalReviews, 0),
@@ -848,11 +884,6 @@ async function main() {
         console.log(`   ${i + 1}. ${b.name} - ${b.totalMentions} mentions`);
       });
     }
-
-    console.log(`\n⏱️  Execution Time:`);
-    console.log(`   Total: ${hours}h ${minutes}m ${seconds}s`);
-    console.log(`   Started: ${new Date(startTime).toLocaleTimeString()}`);
-    console.log(`   Finished: ${new Date(endTime).toLocaleTimeString()}`);
 
     console.log(`\n📁 Results saved to:`);
     console.log(`   Combined: ./${CONFIG.RESULTS_DIR}/beach-reviews-final.json`);
