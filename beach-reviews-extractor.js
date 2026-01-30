@@ -272,221 +272,326 @@ function buildReviewPageUrl(baseUrl, pageNum) {
   return baseUrl;
 }
 
-async function extractSinglePageWithFreshBrowser(beachUrl, pageNum) {
-  const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
-  let browser;
-
+async function dismissCookieConsent(page) {
   try {
-    browser = await puppeteer.connect({
-      browserWSEndpoint,
-      timeout: 15000
-    });
-
-    const page = await browser.newPage();
-    const client = await page.createCDPSession();
-
-    const pageUrl = buildReviewPageUrl(beachUrl, pageNum);
-
-    await page.goto(pageUrl, {
-      timeout: 30000,
-      waitUntil: 'domcontentloaded'  // Don't wait for all network requests
-    });
-
-    // Check for CAPTCHA
-    try {
-      const { status } = await client.send('Captcha.waitForSolve', {
-        detectTimeout: 3000,
-      });
-      if (status !== 'none') {
-        console.log(`    ✓ CAPTCHA ${status}`);
+    // Try clicking "I Accept" button using Puppeteer's click for real browser events
+    // The cookie consent button has id="onetrust-accept-btn-handler" on many sites
+    // or text "I Accept" / "Accept All"
+    const selectors = [
+      '#onetrust-accept-btn-handler',
+      'button[id*="accept"]',
+      'button[title="I Accept"]',
+      'button[title="Accept All"]',
+    ];
+    for (const sel of selectors) {
+      const btn = await page.$(sel);
+      if (btn) {
+        await page.click(sel);
+        console.log(`    🍪 Dismissed cookie consent via: ${sel}`);
+        await delay(2000);
+        return;
       }
-    } catch (e) {
-      // No CAPTCHA
     }
-
-    // Wait for page to fully render
-    await randomDelay(3000, 4000);
-
-    // Debug: Log what we find on the page
-    const debugInfo = await page.evaluate(() => {
-      return {
-        url: window.location.href,
-        title: document.title,
-        hasReviewCards: document.querySelectorAll('[data-automation="reviewCard"]').length,
-        hasProfileLinks: document.querySelectorAll('a[href*="/Profile/"]').length,
-        hasSvgs: document.querySelectorAll('svg').length,
-        hasH3: document.querySelectorAll('h3').length,
-        bodyLength: document.body?.innerHTML?.length || 0,
-        sampleText: document.body?.textContent?.substring(0, 500) || ''
-      };
+    // Fallback: find by text and mark with attribute for page.click()
+    const found = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      for (const btn of buttons) {
+        const text = btn.textContent?.trim() || '';
+        if (text === 'I Accept' || text === 'Accept All' || text === 'Accept all') {
+          btn.setAttribute('data-cookie-accept', 'true');
+          return text;
+        }
+      }
+      return null;
     });
-    console.log(`    🔍 Debug: URL=${debugInfo.url}`);
-    console.log(`    🔍 Debug: reviewCards=${debugInfo.hasReviewCards}, profiles=${debugInfo.hasProfileLinks}, svgs=${debugInfo.hasSvgs}, h3s=${debugInfo.hasH3}`);
-    console.log(`    🔍 Debug: bodyLength=${debugInfo.bodyLength}`);
-
-    // Try scrolling to trigger lazy loading
-    await page.evaluate(() => window.scrollTo(0, 500));
-    await randomDelay(1000, 1500);
-    await page.evaluate(() => window.scrollTo(0, 1000));
-    await randomDelay(1000, 1500);
-
-    // Extract reviews from current page
-    const pageReviews = await page.evaluate(() => {
-      const reviews = [];
-      const seenTexts = new Set();
-      const debug = [];
-
-      // Method 1: Find review cards using data-automation attribute
-      let reviewCards = Array.from(document.querySelectorAll('[data-automation="reviewCard"]'));
-      debug.push(`Method1: ${reviewCards.length} cards`);
-
-      // Method 2: Try _c class which wraps review cards
-      if (reviewCards.length === 0) {
-        reviewCards = Array.from(document.querySelectorAll('div._c[data-automation="reviewCard"], div[class*="_c"]')).filter(el => {
-          return el.querySelector('a[href*="/Profile/"]') && el.querySelector('svg');
-        });
-        debug.push(`Method2: ${reviewCards.length} cards`);
-      }
-
-      // Method 3: Find by profile links and walk up
-      if (reviewCards.length === 0) {
-        const profileLinks = document.querySelectorAll('a[href*="/Profile/"]');
-        debug.push(`Found ${profileLinks.length} profile links`);
-        const cardSet = new Set();
-        profileLinks.forEach(link => {
-          let parent = link.parentElement;
-          for (let i = 0; i < 10 && parent; i++) {
-            if (parent.querySelector('h3') && parent.querySelector('svg')) {
-              cardSet.add(parent);
-              break;
-            }
-            parent = parent.parentElement;
-          }
-        });
-        reviewCards = Array.from(cardSet);
-        debug.push(`Method3: ${reviewCards.length} cards`);
-      }
-
-      console.log('DEBUG:', debug.join(', '));
-
-      reviewCards.forEach(card => {
-        // Extract title - from h3 or first short link text
-        let title = '';
-        const h3 = card.querySelector('h3');
-        if (h3) {
-          title = h3.textContent?.trim() || '';
-        }
-        if (!title) {
-          const titleLink = card.querySelector('a[href*="ShowUserReviews"]');
-          if (titleLink) title = titleLink.textContent?.trim() || '';
-        }
-
-        // Extract text - find the longest meaningful text block
-        let text = '';
-        const allSpans = card.querySelectorAll('span');
-        let longestText = '';
-
-        allSpans.forEach(span => {
-          const t = span.textContent?.trim() || '';
-          // Must be longer than current, reasonable length, not UI text
-          if (t.length > longestText.length &&
-              t.length > 30 &&
-              t.length < 5000 &&
-              t !== title &&
-              !t.includes('contribution') &&
-              !t.includes('Helpful') &&
-              !t.includes('Read more') &&
-              !t.includes('Tripadvisor LLC') &&
-              !t.match(/^\d+$/) &&
-              !t.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/)) {
-            longestText = t;
-          }
-        });
-        text = longestText;
-
-        // Extract rating from SVG
-        let rating = 0;
-        const svg = card.querySelector('svg');
-        if (svg) {
-          // Check title element inside SVG
-          const svgTitle = svg.querySelector('title');
-          if (svgTitle) {
-            const match = svgTitle.textContent?.match(/(\d+(?:\.\d+)?)\s*of\s*5/i);
-            if (match) rating = parseFloat(match[1]);
-          }
-          // Check aria-labelledby
-          if (!rating) {
-            const labelId = svg.getAttribute('aria-labelledby');
-            if (labelId) {
-              const label = document.getElementById(labelId);
-              if (label) {
-                const match = label.textContent?.match(/(\d+(?:\.\d+)?)\s*of\s*5/i);
-                if (match) rating = parseFloat(match[1]);
-              }
-            }
-          }
-        }
-
-        // Extract date - look for date patterns in text
-        let date = '';
-        const cardText = card.textContent || '';
-        const dateMatch = cardText.match(/Written\s+(\d{1,2}\s+\w+\s+\d{4})/i);
-        if (dateMatch) {
-          date = dateMatch[1];
-        } else {
-          const altDateMatch = cardText.match(/((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4})/i);
-          if (altDateMatch) date = altDateMatch[1];
-        }
-
-        // Extract reviewer
-        let reviewer = '';
-        const profileLink = card.querySelector('a[href*="/Profile/"]');
-        if (profileLink) {
-          // Get direct text or first span text
-          const spans = profileLink.querySelectorAll('span');
-          if (spans.length > 0) {
-            reviewer = spans[0].textContent?.trim() || '';
-          }
-          if (!reviewer) {
-            reviewer = profileLink.textContent?.trim() || '';
-          }
-          // Clean up
-          reviewer = reviewer.split(/\d+ contribution/)[0].trim();
-          reviewer = reviewer.split('\n')[0].trim();
-        }
-
-        // Add review if we have text
-        if (text && text.length > 20) {
-          const textKey = text.substring(0, 50).toLowerCase();
-          if (!seenTexts.has(textKey)) {
-            seenTexts.add(textKey);
-            reviews.push({ title, text, rating, date, reviewer });
-          }
-        }
-      });
-
-      return reviews;
-    });
-
-    await browser.close();
-    return pageReviews;
-
-  } catch (error) {
-    console.error(`    ❌ ${error.message}`);
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (e) {
-        // Ignore close errors
-      }
-      // Wait a bit after closing to ensure connection is fully released
-      await delay(1000);
+    if (found) {
+      await page.click('button[data-cookie-accept="true"]');
+      console.log(`    🍪 Dismissed cookie consent: ${found}`);
+      await delay(2000);
     }
-    return [];
+  } catch (e) {
+    // No cookie dialog, continue
   }
 }
 
-async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
+async function dismissInterstitial(page) {
+  try {
+    const btn = await page.$('[data-automation="interstitialClose"] button');
+    if (btn) {
+      await page.click('[data-automation="interstitialClose"] button');
+      console.log('    ✖️ Dismissed interstitial popup');
+      await delay(1500);
+    }
+  } catch (e) {
+    // No interstitial, continue
+  }
+}
+
+async function setLanguageFilterToAll(page) {
+  try {
+    // Dismiss cookie consent if present (blocks all other clicks)
+    await dismissCookieConsent(page);
+    await dismissInterstitial(page);
+
+    // Step 1: Open the Filters modal
+    await page.waitForSelector('button[aria-label="Click to open the filter"]', { timeout: 10000 });
+    const screenshotDir = './results/beaches/debug-screenshots';
+    if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
+
+    await page.screenshot({ path: `${screenshotDir}/01-before-filter-click.png`, fullPage: false });
+
+    // Step 1: Click Filters button
+    await page.waitForSelector('button[aria-label="Click to open the filter"]', { timeout: 10000 });
+    await page.evaluate(() => {
+      const btn = document.querySelector('button[aria-label="Click to open the filter"]');
+      const span = btn.querySelector('span.biGQs');
+      if (span) span.click();
+      else btn.click();
+    });
+    console.log('    🌐 Opened filters modal');
+    await delay(4000);
+    await page.screenshot({ path: `${screenshotDir}/02-modal-opened.png`, fullPage: false });
+
+    // Step 2: Scroll to Language and click dropdown
+    const hasLangFilter = await page.$('[data-automation="ugcLanguageFilter"] button');
+    console.log(`    🔍 Language filter button found: ${!!hasLangFilter}`);
+
+    if (!hasLangFilter) {
+      // Dump modal HTML for debugging
+      const modalHTML = await page.evaluate(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        return dialog ? dialog.innerHTML.substring(0, 2000) : 'NO DIALOG FOUND';
+      });
+      console.log(`    🔍 Modal HTML: ${modalHTML.substring(0, 500)}`);
+      await page.screenshot({ path: `${screenshotDir}/02b-no-lang-filter.png`, fullPage: false });
+      return false;
+    }
+
+    await page.evaluate(() => {
+      const langFilter = document.querySelector('[data-automation="ugcLanguageFilter"] button');
+      langFilter.scrollIntoView({ behavior: 'instant', block: 'center' });
+    });
+    await delay(1000);
+    await page.evaluate(() => {
+      document.querySelector('[data-automation="ugcLanguageFilter"] button').click();
+    });
+    console.log('    🌐 Opened language dropdown');
+    await delay(3000);
+    await page.screenshot({ path: `${screenshotDir}/03-dropdown-opened.png`, fullPage: false });
+
+    // Step 3: Select "All languages" using keyboard navigation
+    // The listbox is open with focus. Press Home to go to first item, then Enter to select.
+    await page.keyboard.press('Home');
+    await delay(300);
+    await page.keyboard.press('Enter');
+    await delay(500);
+
+    // Verify selection changed
+    const selectedLang = await page.evaluate(() => {
+      const langBtn = document.querySelector('[data-automation="ugcLanguageFilter"] button');
+      return langBtn ? langBtn.textContent?.trim() : 'unknown';
+    });
+    console.log(`    🌐 Language after selection: ${selectedLang}`);
+
+    if (!selectedLang.includes('All languages')) {
+      // Home+Enter didn't work, try ArrowUp repeatedly to reach first item
+      console.log('    🔍 Retrying with ArrowUp...');
+      // Re-open dropdown
+      await page.click('[data-automation="ugcLanguageFilter"] button');
+      await delay(1500);
+      // Press ArrowUp many times to get to the top
+      for (let i = 0; i < 30; i++) {
+        await page.keyboard.press('ArrowUp');
+        await delay(50);
+      }
+      await page.keyboard.press('Enter');
+      await delay(500);
+
+      const retryLang = await page.evaluate(() => {
+        const langBtn = document.querySelector('[data-automation="ugcLanguageFilter"] button');
+        return langBtn ? langBtn.textContent?.trim() : 'unknown';
+      });
+      console.log(`    🌐 Language after retry: ${retryLang}`);
+    }
+
+    const allLangClicked = true;
+    await delay(1500);
+    await page.screenshot({ path: `${screenshotDir}/04-alllang-selected.png`, fullPage: false });
+
+    // Step 4: Click Apply using page.click()
+    const applyBtn = await page.$('[data-button-type="primary"] button.rmyCe');
+    if (applyBtn) {
+      await page.click('[data-button-type="primary"] button.rmyCe');
+    } else {
+      // Fallback
+      await page.click('button.rmyCe');
+    }
+    console.log('    🌐 Applied language filter');
+    await delay(5000);
+    await page.screenshot({ path: `${screenshotDir}/05-after-apply.png`, fullPage: false });
+
+    return true;
+  } catch (e) {
+    console.log(`    ⚠️ Language filter error: ${e.message}`);
+    return false;
+  }
+}
+
+async function extractPageReviews(page) {
+  // Debug: Log what we find on the page
+  const debugInfo = await page.evaluate(() => {
+    return {
+      url: window.location.href,
+      title: document.title,
+      hasReviewCards: document.querySelectorAll('[data-automation="reviewCard"]').length,
+      hasProfileLinks: document.querySelectorAll('a[href*="/Profile/"]').length,
+      hasSvgs: document.querySelectorAll('svg').length,
+      hasH3: document.querySelectorAll('h3').length,
+      bodyLength: document.body?.innerHTML?.length || 0,
+      sampleText: document.body?.textContent?.substring(0, 500) || ''
+    };
+  });
+  console.log(`    🔍 Debug: URL=${debugInfo.url}`);
+  console.log(`    🔍 Debug: reviewCards=${debugInfo.hasReviewCards}, profiles=${debugInfo.hasProfileLinks}, svgs=${debugInfo.hasSvgs}, h3s=${debugInfo.hasH3}`);
+  console.log(`    🔍 Debug: bodyLength=${debugInfo.bodyLength}`);
+
+  // Try scrolling to trigger lazy loading
+  await page.evaluate(() => window.scrollTo(0, 500));
+  await randomDelay(1000, 1500);
+  await page.evaluate(() => window.scrollTo(0, 1000));
+  await randomDelay(1000, 1500);
+
+  // Extract reviews from current page
+  const pageReviews = await page.evaluate(() => {
+    const reviews = [];
+    const seenTexts = new Set();
+    const debug = [];
+
+    // Method 1: Find review cards using data-automation attribute
+    let reviewCards = Array.from(document.querySelectorAll('[data-automation="reviewCard"]'));
+    debug.push(`Method1: ${reviewCards.length} cards`);
+
+    // Method 2: Try _c class which wraps review cards
+    if (reviewCards.length === 0) {
+      reviewCards = Array.from(document.querySelectorAll('div._c[data-automation="reviewCard"], div[class*="_c"]')).filter(el => {
+        return el.querySelector('a[href*="/Profile/"]') && el.querySelector('svg');
+      });
+      debug.push(`Method2: ${reviewCards.length} cards`);
+    }
+
+    // Method 3: Find by profile links and walk up
+    if (reviewCards.length === 0) {
+      const profileLinks = document.querySelectorAll('a[href*="/Profile/"]');
+      debug.push(`Found ${profileLinks.length} profile links`);
+      const cardSet = new Set();
+      profileLinks.forEach(link => {
+        let parent = link.parentElement;
+        for (let i = 0; i < 10 && parent; i++) {
+          if (parent.querySelector('h3') && parent.querySelector('svg')) {
+            cardSet.add(parent);
+            break;
+          }
+          parent = parent.parentElement;
+        }
+      });
+      reviewCards = Array.from(cardSet);
+      debug.push(`Method3: ${reviewCards.length} cards`);
+    }
+
+    console.log('DEBUG:', debug.join(', '));
+
+    reviewCards.forEach(card => {
+      let title = '';
+      const h3 = card.querySelector('h3');
+      if (h3) {
+        title = h3.textContent?.trim() || '';
+      }
+      if (!title) {
+        const titleLink = card.querySelector('a[href*="ShowUserReviews"]');
+        if (titleLink) title = titleLink.textContent?.trim() || '';
+      }
+
+      let text = '';
+      const allSpans = card.querySelectorAll('span');
+      let longestText = '';
+
+      allSpans.forEach(span => {
+        const t = span.textContent?.trim() || '';
+        if (t.length > longestText.length &&
+            t.length > 30 &&
+            t.length < 5000 &&
+            t !== title &&
+            !t.includes('contribution') &&
+            !t.includes('Helpful') &&
+            !t.includes('Read more') &&
+            !t.includes('Tripadvisor LLC') &&
+            !t.match(/^\d+$/) &&
+            !t.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/)) {
+          longestText = t;
+        }
+      });
+      text = longestText;
+
+      let rating = 0;
+      const svg = card.querySelector('svg');
+      if (svg) {
+        const svgTitle = svg.querySelector('title');
+        if (svgTitle) {
+          const match = svgTitle.textContent?.match(/(\d+(?:\.\d+)?)\s*of\s*5/i);
+          if (match) rating = parseFloat(match[1]);
+        }
+        if (!rating) {
+          const labelId = svg.getAttribute('aria-labelledby');
+          if (labelId) {
+            const label = document.getElementById(labelId);
+            if (label) {
+              const match = label.textContent?.match(/(\d+(?:\.\d+)?)\s*of\s*5/i);
+              if (match) rating = parseFloat(match[1]);
+            }
+          }
+        }
+      }
+
+      let date = '';
+      const cardText = card.textContent || '';
+      const dateMatch = cardText.match(/Written\s+(\d{1,2}\s+\w+\s+\d{4})/i);
+      if (dateMatch) {
+        date = dateMatch[1];
+      } else {
+        const altDateMatch = cardText.match(/((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4})/i);
+        if (altDateMatch) date = altDateMatch[1];
+      }
+
+      let reviewer = '';
+      const profileLink = card.querySelector('a[href*="/Profile/"]');
+      if (profileLink) {
+        const spans = profileLink.querySelectorAll('span');
+        if (spans.length > 0) {
+          reviewer = spans[0].textContent?.trim() || '';
+        }
+        if (!reviewer) {
+          reviewer = profileLink.textContent?.trim() || '';
+        }
+        reviewer = reviewer.split(/\d+ contribution/)[0].trim();
+        reviewer = reviewer.split('\n')[0].trim();
+      }
+
+      if (text && text.length > 20) {
+        const textKey = text.substring(0, 50).toLowerCase();
+        if (!seenTexts.has(textKey)) {
+          seenTexts.add(textKey);
+          reviews.push({ title, text, rating, date, reviewer });
+        }
+      }
+    });
+
+    return reviews;
+  });
+
+  return pageReviews;
+}
+
+async function extractReviewsWithSharedBrowser(beachUrl, startPage, maxPages) {
   const beachProgress = initBeachPageProgress(beachUrl);
   let allReviews = beachProgress.reviews || [];
   const resumeFromPage = beachProgress.lastCompletedPage + 1;
@@ -502,96 +607,201 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
     console.log(`    📂 Resuming from page ${actualStartPage} (${allReviews.length} reviews, ${prevTimeStr} elapsed)`);
   }
 
-  let consecutiveEmptyPages = 0;
-  const MAX_EMPTY_PAGES = 3;
-  let shouldStopPagination = false;  // Flag to break out of both loops
+  const browserWSEndpoint = `wss://${AUTH}@brd.superproxy.io:9222`;
+  let browser;
 
-  for (let currentPage = actualStartPage; currentPage <= endPage && !shouldStopPagination; currentPage++) {
-    console.log(`    Page ${currentPage}...`);
+  try {
+    browser = await puppeteer.connect({
+      browserWSEndpoint,
+      timeout: 15000
+    });
 
-    let pageReviews = [];
-    let pageSuccess = false;
-    let retryCount = 0;
+    const page = await browser.newPage();
+    const client = await page.createCDPSession();
 
-    while (retryCount < CONFIG.MAX_PAGE_RETRIES && !pageSuccess) {
-      const pageStartTime = Date.now();
+    // Navigate to page 1 first
+    const firstPageUrl = buildReviewPageUrl(beachUrl, actualStartPage);
+    await page.goto(firstPageUrl, {
+      timeout: 60000,
+      waitUntil: 'domcontentloaded'
+    });
 
-      try {
-        pageReviews = await withTimeout(
-          extractSinglePageWithFreshBrowser(beachUrl, currentPage),
-          CONFIG.PAGE_TIMEOUT,
-          `Page ${currentPage} timed out after 2 minutes`
-        );
+    // Check for CAPTCHA
+    try {
+      const { status } = await client.send('Captcha.waitForSolve', {
+        detectTimeout: 3000,
+      });
+      if (status !== 'none') {
+        console.log(`    ✓ CAPTCHA ${status}`);
+      }
+    } catch (e) {
+      // No CAPTCHA
+    }
 
-        const pageEndTime = Date.now();
+    await randomDelay(3000, 4000);
 
-        console.log(`    ✓ ${pageReviews.length} reviews`);
-        allReviews = allReviews.concat(pageReviews);
+    // Scroll bottom to top to trigger any lazy popups
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await delay(1500);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await delay(2000);
 
-        const currentSessionTime = Date.now() - sessionStartTime;
-        const totalElapsedTime = previousElapsedTime + currentSessionTime;
+    // Dismiss popups that block interaction
+    await dismissCookieConsent(page);
+    await dismissInterstitial(page);
 
-        const pageTimeData = {
-          startTime: new Date(pageStartTime).toISOString(),
-          endTime: new Date(pageEndTime).toISOString(),
-          durationMs: pageEndTime - pageStartTime
-        };
+    // Click outside any remaining overlay (click on the page body area)
+    await page.mouse.click(100, 100);
+    await delay(1000);
 
-        updateBeachPageProgress(beachUrl, currentPage, allReviews, totalElapsedTime, pageTimeData);
-        console.log(`    💾 Progress saved (page ${currentPage}, ${allReviews.length} reviews, ${formatTime(totalElapsedTime)} total)`);
+    // Dismiss again in case clicking revealed more popups
+    await dismissCookieConsent(page);
+    await dismissInterstitial(page);
 
-        pageSuccess = true;
+    // Set language filter to "All languages" via modal
+    await setLanguageFilterToAll(page);
 
-        if (allReviews.length >= CONFIG.TARGET_REVIEWS) {
-          console.log(`    ✅ Reached target of ${CONFIG.TARGET_REVIEWS} reviews (${allReviews.length} collected)`);
-          shouldStopPagination = true;
-          break;
-        }
+    let consecutiveEmptyPages = 0;
+    const MAX_EMPTY_PAGES = 3;
+    let shouldStopPagination = false;
 
-        if (pageReviews.length === 0) {
-          consecutiveEmptyPages++;
-          console.log(`    ⚠️ No reviews found (${consecutiveEmptyPages}/${MAX_EMPTY_PAGES} empty pages)`);
+    for (let currentPage = actualStartPage; currentPage <= endPage && !shouldStopPagination; currentPage++) {
+      console.log(`    Page ${currentPage}...`);
 
-          if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
-            console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive pages with no reviews, stopping pagination`);
+      let pageReviews = [];
+      let pageSuccess = false;
+      let retryCount = 0;
+
+      while (retryCount < CONFIG.MAX_PAGE_RETRIES && !pageSuccess) {
+        const pageStartTime = Date.now();
+
+        try {
+          // Click the "Next page" arrow to go to the next page
+          if (currentPage !== actualStartPage || retryCount > 0) {
+            // Mark the next arrow then use page.click() for real browser events
+            const nextExists = await page.evaluate(() => {
+              const nextBtn = document.querySelector('a[data-smoke-attr="pagination-next-arrow"]');
+              return !!nextBtn;
+            });
+
+            if (!nextExists) {
+              console.log('    ⚠️ No "Next page" button found, stopping pagination');
+              shouldStopPagination = true;
+              break;
+            }
+
+            // Click next page and wait for content to load
+            await page.click('a[data-smoke-attr="pagination-next-arrow"]');
+            // Wait for navigation — catch timeout since it may be SPA-style
+            await page.waitForNavigation({ timeout: 10000, waitUntil: 'domcontentloaded' }).catch(() => {});
+            await randomDelay(3000, 4000);
+
+            // Check for CAPTCHA
+            try {
+              const { status } = await client.send('Captcha.waitForSolve', {
+                detectTimeout: 3000,
+              });
+              if (status !== 'none') {
+                console.log(`    ✓ CAPTCHA ${status}`);
+              }
+            } catch (e) {
+              // No CAPTCHA
+            }
+
+            await randomDelay(1000, 2000);
+          }
+
+          // Log pagination counter ("Showing results X-Y of Z")
+          const paginationInfo = await page.evaluate(() => {
+            const el = document.querySelector('div.Ci');
+            return el ? el.textContent.trim() : 'pagination not found';
+          });
+          console.log(`    📄 ${paginationInfo}`);
+
+          pageReviews = await withTimeout(
+            extractPageReviews(page),
+            CONFIG.PAGE_TIMEOUT,
+            `Page ${currentPage} timed out after 2 minutes`
+          );
+
+          const pageEndTime = Date.now();
+
+          console.log(`    ✓ ${pageReviews.length} reviews`);
+          allReviews = allReviews.concat(pageReviews);
+
+          const currentSessionTime = Date.now() - sessionStartTime;
+          const totalElapsedTime = previousElapsedTime + currentSessionTime;
+
+          const pageTimeData = {
+            startTime: new Date(pageStartTime).toISOString(),
+            endTime: new Date(pageEndTime).toISOString(),
+            durationMs: pageEndTime - pageStartTime
+          };
+
+          updateBeachPageProgress(beachUrl, currentPage, allReviews, totalElapsedTime, pageTimeData);
+          console.log(`    💾 Progress saved (page ${currentPage}, ${allReviews.length} reviews, ${formatTime(totalElapsedTime)} total)`);
+
+          pageSuccess = true;
+
+          if (allReviews.length >= CONFIG.TARGET_REVIEWS) {
+            console.log(`    ✅ Reached target of ${CONFIG.TARGET_REVIEWS} reviews (${allReviews.length} collected)`);
             shouldStopPagination = true;
             break;
           }
-        } else {
-          consecutiveEmptyPages = 0;
-        }
 
-      } catch (error) {
-        retryCount++;
-        console.log(`    ⚠️ ${error.message} (attempt ${retryCount}/${CONFIG.MAX_PAGE_RETRIES})`);
+          if (pageReviews.length === 0) {
+            consecutiveEmptyPages++;
+            console.log(`    ⚠️ No reviews found (${consecutiveEmptyPages}/${MAX_EMPTY_PAGES} empty pages)`);
 
-        if (retryCount < CONFIG.MAX_PAGE_RETRIES) {
-          // Wait longer on timeout errors to let things settle
-          const waitTime = error.message.includes('timeout') ? 5000 : 2000;
-          console.log(`    🔄 Retrying page ${currentPage} in ${waitTime/1000}s with fresh browser...`);
-          await delay(waitTime);
+            if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
+              console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive pages with no reviews, stopping pagination`);
+              shouldStopPagination = true;
+              break;
+            }
+          } else {
+            consecutiveEmptyPages = 0;
+          }
+
+        } catch (error) {
+          retryCount++;
+          console.log(`    ⚠️ ${error.message} (attempt ${retryCount}/${CONFIG.MAX_PAGE_RETRIES})`);
+
+          if (retryCount < CONFIG.MAX_PAGE_RETRIES) {
+            const waitTime = error.message.includes('timeout') ? 5000 : 2000;
+            console.log(`    🔄 Retrying page ${currentPage} in ${waitTime/1000}s...`);
+            await delay(waitTime);
+          }
         }
       }
-    }
 
-    if (shouldStopPagination) {
-      break;
-    }
-
-    if (!pageSuccess) {
-      console.log(`    ⏭️ Skipping page ${currentPage} after ${CONFIG.MAX_PAGE_RETRIES} failed attempts`);
-      consecutiveEmptyPages++;
-
-      if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
-        console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive failures, stopping pagination`);
-        shouldStopPagination = true;
+      if (shouldStopPagination) {
         break;
       }
-      continue;
+
+      if (!pageSuccess) {
+        console.log(`    ⏭️ Skipping page ${currentPage} after ${CONFIG.MAX_PAGE_RETRIES} failed attempts`);
+        consecutiveEmptyPages++;
+
+        if (consecutiveEmptyPages >= MAX_EMPTY_PAGES) {
+          console.log(`    ⚠️ ${MAX_EMPTY_PAGES} consecutive failures, stopping pagination`);
+          shouldStopPagination = true;
+          break;
+        }
+        continue;
+      }
+
+      if (currentPage < endPage && !shouldStopPagination) {
+        await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
+      }
     }
 
-    if (currentPage < endPage && !shouldStopPagination) {
-      await randomDelay(CONFIG.DELAY_BETWEEN_PAGES, CONFIG.DELAY_BETWEEN_PAGES + 2000);
+    await browser.close();
+
+  } catch (error) {
+    console.error(`    ❌ Browser error: ${error.message}`);
+    if (browser) {
+      try { await browser.close(); } catch (e) { /* ignore */ }
+      await delay(1000);
     }
   }
 
@@ -602,13 +812,13 @@ async function extractReviewsWithFreshBrowser(beachUrl, startPage, maxPages) {
   return { reviews: allReviews, totalTime };
 }
 
-async function processBeachWithFreshBrowser(beach, beachIndex, totalBeaches) {
+async function processBeach(beach, beachIndex, totalBeaches) {
   console.log(`\n[${beachIndex + 1}/${totalBeaches}] ${beach.name}`);
   console.log(`  📖 Extracting up to ${CONFIG.MAX_REVIEW_PAGES} pages (~${CONFIG.MAX_REVIEW_PAGES * 10} reviews)`);
-  console.log(`  🔄 Using fresh browser for EACH page\n`);
+  console.log(`  🔄 Using shared browser session per beach\n`);
 
   try {
-    const result = await extractReviewsWithFreshBrowser(beach.url, 1, CONFIG.MAX_REVIEW_PAGES);
+    const result = await extractReviewsWithSharedBrowser(beach.url, 1, CONFIG.MAX_REVIEW_PAGES);
     const { reviews: allReviews, totalTime } = result;
     console.log(`  ✅ Total: ${allReviews.length} reviews extracted in ${formatTime(totalTime)}`);
 
@@ -735,7 +945,7 @@ async function main() {
         console.log(`  📂 Resuming from page ${beachProgress.lastCompletedPage + 1} (${beachProgress.reviews?.length || 0} reviews so far)`);
       }
 
-      const result = await processBeachWithFreshBrowser(beach, i, beaches.length);
+      const result = await processBeach(beach, i, beaches.length);
       const { reviews, totalTime } = result;
 
       let totalMentions = 0;
