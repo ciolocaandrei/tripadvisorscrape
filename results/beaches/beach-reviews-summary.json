@@ -1,0 +1,145 @@
+{
+  "totalBeachesScraped": 25,
+  "totalReviewsScraped": 24390,
+  "totalKeywordMentions": 67434,
+  "beachesWithKeywords": 25,
+  "aggregateKeywordBreakdown": {
+    "sand": 6093,
+    "clean": 3029,
+    "clear water": 709,
+    "crowded": 2329,
+    "paradise": 840,
+    "beautiful": 11608,
+    "stunning": 1666,
+    "dangerous": 452,
+    "walking": 1202,
+    "amazing": 3356,
+    "parking": 2813,
+    "windy": 516,
+    "crystal clear": 1295,
+    "scorching": 18,
+    "kids": 1148,
+    "toilets": 430,
+    "busy": 1490,
+    "serene": 70,
+    "gorgeous": 998,
+    "cold": 475,
+    "relaxing": 1026,
+    "warm": 1566,
+    "turquoise": 1046,
+    "sharks": 50,
+    "umbrellas": 942,
+    "touristy": 166,
+    "sunbeds": 512,
+    "quiet": 789,
+    "rocks": 928,
+    "showers": 327,
+    "children": 864,
+    "hot": 713,
+    "bars": 1003,
+    "white sand": 1115,
+    "cool": 575,
+    "packed": 256,
+    "snorkeling": 1337,
+    "calm": 833,
+    "waves": 2427,
+    "swimming": 1288,
+    "restaurants": 1602,
+    "heaven": 150,
+    "secluded": 109,
+    "empty": 205,
+    "pristine": 190,
+    "shells": 94,
+    "coral": 493,
+    "family": 878,
+    "garbage": 71,
+    "dirty": 153,
+    "surfing": 399,
+    "peaceful": 288,
+    "sunny": 241,
+    "shell": 21,
+    "relaxed": 137,
+    "breathtaking": 651,
+    "litter": 55,
+    "safe": 1023,
+    "sunbathing": 114,
+    "lifeguard": 278,
+    "trash": 104,
+    "blue water": 292,
+    "private": 200,
+    "tranquil": 61,
+    "golden sand": 115,
+    "rubbish": 77,
+    "seashells": 5,
+    "calm water": 75,
+    "currents": 163,
+    "jellyfish": 78,
+    "family-friendly": 6,
+    "pollution": 17
+  },
+  "aggregateCategories": {
+    "nature": 8864,
+    "cleanliness": 3696,
+    "water": 5844,
+    "crowding": 4755,
+    "beauty": 19269,
+    "safety": 2044,
+    "activities": 4340,
+    "facilities": 7629,
+    "weather": 4104,
+    "family": 2896,
+    "relaxation": 3993
+  },
+  "topBeachesByKeywords": [
+    {
+      "rank": 1,
+      "name": "Elafonissi Beach",
+      "totalMentions": 3877
+    },
+    {
+      "rank": 20,
+      "name": "Tropea Beach",
+      "totalMentions": 3800
+    },
+    {
+      "rank": 3,
+      "name": "Eagle Beach",
+      "totalMentions": 3631
+    },
+    {
+      "rank": 10,
+      "name": "Myrtos Beach",
+      "totalMentions": 3628
+    },
+    {
+      "rank": 8,
+      "name": "Platja De Muro",
+      "totalMentions": 3507
+    },
+    {
+      "rank": 19,
+      "name": "Playa Norte",
+      "totalMentions": 3483
+    },
+    {
+      "rank": 14,
+      "name": "Poipu Beach Park",
+      "totalMentions": 3420
+    },
+    {
+      "rank": 22,
+      "name": "Ka'anapali Beach",
+      "totalMentions": 3408
+    },
+    {
+      "rank": 21,
+      "name": "Balandra Beach",
+      "totalMentions": 3388
+    },
+    {
+      "rank": 23,
+      "name": "Reynisfjara Beach",
+      "totalMentions": 3296
+    }
+  ]
+}
